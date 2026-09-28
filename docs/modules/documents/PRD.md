@@ -1,33 +1,37 @@
-# PRD — Factures et intake des documents (Phase 3)
+# PRD — Intake et extraction des factures (Phases 3–4)
 
 ## Objectif
 
-Permettre aux membres autorisés d’importer des factures dans une société, de conserver chaque document source dans un stockage privé et de suivre son état initial. Les données OCR, les lignes de facture exploitables et l’analyse comptable sont produites dans les phases ultérieures, pas au moment de l’upload.
+Permettre aux membres autorisés d’importer des factures dans une société, de conserver l’original en privé, puis de lancer automatiquement une extraction OCR indépendante par document. Les champs, lignes et contrôles de cohérence doivent être traçables ; aucune proposition ni écriture comptable n’est créée à cette étape.
 
-## Exigences et état
+## Phase 3 — Intake livré
 
-- **Schéma en place :** `invoices` et `invoice_lines`, reliés aux sociétés, tiers éventuels, utilisateurs ayant importé le document et factures parentes. `third_party_id` reste nullable tant que le fournisseur n’est pas rapproché.
-- **Formats :** PDF, JPG, JPEG et PNG, contrôlés côté serveur ; limite de 20 Mo par fichier et lot UI de 300 fichiers maximum.
-- **Traitement indépendant :** la sélection multiple est découpée en une requête et une opération de stockage par fichier. Une erreur de validation, réseau ou stockage ne supprime pas les fichiers déjà acceptés et ne bloque pas les suivants.
-- **Stockage privé :** les sources sont conservées sur le disque Laravel `local`, sous un chemin propre à la société. Aucun chemin de stockage n’est exposé dans les props Inertia. Le téléchargement passe par une route authentifiée, vérifie l’accès à la société et refuse un identifiant de facture appartenant à une autre société.
-- **Autorisations :** seuls les administrateurs du cabinet et les gestionnaires de factures ayant accès à la société peuvent importer. Tout utilisateur ayant accès à la société peut consulter la liste et télécharger ses documents.
-- **Doublons :** une empreinte SHA-256 est calculée sur le contenu et comparée aux factures de la même société. Une requête concurrente est sérialisée au niveau de la société. Un doublon retourne `409` et n’est enregistré qu’après confirmation explicite (`confirm_duplicate`). Les doublons inter-sociétés ne se déclenchent pas.
-- **État visible :** un document importé porte l’état `uploaded`, affiché « Reçue · OCR à venir ». Les champs fournisseur, référence, dates et montants restent vides tant qu’aucune extraction n’a eu lieu.
-- **Portée différée :** aucun job OCR, appel Mistral, JSON extrait, rapprochement fournisseur, calcul fiscal, ligne OCR ou proposition comptable n’est créé dans cette phase. L’interface explique cette limite.
-- **Compatibilité prototype :** les migrations historiques `documents` et `accounting_entries` restent intactes. Aucune donnée de ces tables n’est déplacée ni supprimée implicitement.
+- **Schéma :** `invoices` et `invoice_lines`, reliés aux sociétés, tiers éventuels, utilisateurs importateurs et facture parente. `third_party_id` reste nullable avant tout rapprochement.
+- **Formats :** PDF, JPG, JPEG et PNG contrôlés côté serveur ; maximum 20 Mo par fichier et 300 fichiers par sélection UI.
+- **Traitement indépendant :** un fichier par requête et opération de stockage ; une erreur n’annule pas les fichiers acceptés et ne bloque pas les suivants.
+- **Stockage privé :** disque Laravel `local`, chemin propre à la société, pas de chemin privé dans les props Inertia. Le téléchargement est authentifié et limité à la société concernée.
+- **Autorisations :** administrateurs de cabinet et gestionnaires affectés peuvent importer ; les autres membres autorisés peuvent consulter et télécharger.
+- **Doublons :** comparaison SHA-256 par société, sous verrou pour les requêtes concurrentes. Un doublon retourne `409` et ne persiste qu’après confirmation (`confirm_duplicate`). Aucun conflit inter-sociétés.
+
+## Phase 4 — OCR livré
+
+- Un upload enregistré passe à `ocr_queued` puis planifie un job indépendant sur la file `ocr`. `ProcessInvoiceOcr` est idempotent par société/facture.
+- Le contrat `OcrProvider` isole `MistralOcrProvider`, qui utilise `/v1/ocr` avec un schéma strict d’annotation JSON. Les réponses sont validées avant écriture ; les données incomplètes restent nulles et les réponses invalides ne créent pas d’extraction partielle.
+- Les champs d’en-tête et `invoice_lines` sont persistés dans une transaction. Le JSON brut, le JSON validé, le modèle, l’usage, les tentatives et horodatages sont conservés.
+- Les états visibles sont `ocr_queued`, `ocr_processing`, `ocr_completed` et `ocr_failed`. Les erreurs temporaires sont réessayées ; les échecs exposent un message sûr et les gestionnaires peuvent relancer. Les factures `uploaded` du prototype Phase 3 peuvent être mises en file manuellement.
+- Les totaux ne sont pas corrigés : la formule HT + TVA + FODEC + autres taxes + timbre − retenue est contrôlée seulement si ses sept montants sont extraits. L’interface signale un désaccord ou l’impossibilité de conclure si une composante manque.
+- L’interface actualise les factures en cours et affiche état, erreurs et avertissements. Toute extraction reste à vérifier par un humain.
+
+## Hors périmètre
+
+- Aucun appel Mistral Small, analyse du contexte comptable, rapprochement fournisseur, compte/journal proposé, écriture, export Sage ou validation comptable (Phase 5 / intégration future).
+- Aucun déplacement ni suppression des anciennes tables `documents` et `accounting_entries` ; aucune donnée historique n’est migrée implicitement.
 
 ## Critères d’acceptation
 
-1. Un gestionnaire autorisé peut importer des PDF/images et les retrouver dans la liste de sa société.
-2. Une facture importée est stockée sur le disque privé ; elle n’est téléchargeable qu’après autorisation pour cette société.
-3. Une société ne peut lire, télécharger ou détecter les doublons d’une autre société.
-4. Les formats non autorisés, les fichiers dépassant la limite ou les uploads non autorisés sont rejetés sans persistance.
-5. Un doublon dans la même société exige une confirmation explicite avant la création d’un second document.
-6. Le succès et l’échec de chaque fichier sont visibles ; un fichier en échec ne bloque pas les suivants.
-7. Aucun écran ou message ne prétend qu’un OCR ou une proposition comptable a été exécuté.
-
-## Hors périmètre — phases suivantes
-
-- Phase 4 : contrat OCR Mistral, jobs/queues, reprise sur erreur, données extraites, persistance structurée et états OCR.
-- Phase 5 : contexte comptable, proposition Mistral Small, contrôles déterministes, revue et validation humaine.
-- Migration ou suppression des tables historiques, après analyse et sauvegarde explicites.
+1. Un gestionnaire autorisé peut importer et retrouver ses factures ; les fichiers restent privés et les downloads respectent le périmètre société.
+2. Chaque import accepté est mis en file automatiquement et indépendamment ; un doublon nécessite une confirmation explicite.
+3. Les réponses OCR valides sont persistées avec leurs lignes et éléments d’audit ; une réponse invalide devient une erreur visible, pas une extraction partielle.
+4. L’état, les tentatives, erreurs et avertissements de totaux sont visibles et récupérables.
+5. Les montants extraits ne sont jamais silencieusement recalculés/corrigés et aucune écriture comptable n’est créée.
+6. Les tests utilisent des réponses HTTP simulées et ne nécessitent pas de clé fournisseur réelle.

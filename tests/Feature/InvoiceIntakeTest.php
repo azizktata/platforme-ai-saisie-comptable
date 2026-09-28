@@ -2,12 +2,14 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\ProcessInvoiceOcr;
 use App\Models\Cabinet;
 use App\Models\Company;
 use App\Models\Invoice;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Testing\TestResponse;
 use Inertia\Testing\AssertableInertia as Assert;
@@ -20,6 +22,7 @@ class InvoiceIntakeTest extends TestCase
     public function test_invoice_manager_can_upload_view_and_download_a_private_company_document(): void
     {
         Storage::fake('local');
+        Queue::fake();
 
         $company = Company::factory()->create();
         $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
@@ -28,14 +31,16 @@ class InvoiceIntakeTest extends TestCase
         $this->postUpload($manager, $company, $file)
             ->assertCreated()
             ->assertJsonPath('invoice.original_filename', 'facture.png')
-            ->assertJsonPath('invoice.status', 'uploaded');
+            ->assertJsonPath('invoice.status', 'ocr_queued');
 
         /** @var Invoice $invoice */
         $invoice = $company->invoices()->sole();
         $this->assertSame(hash_file('sha256', $file->getRealPath()), $invoice->file_sha256);
         $this->assertSame($manager->id, $invoice->uploaded_by);
         $this->assertSame('local', $invoice->storage_disk);
+        $this->assertSame('ocr_queued', $invoice->status);
         Storage::disk('local')->assertExists($invoice->file_path);
+        Queue::assertPushedOn('ocr', ProcessInvoiceOcr::class, fn (ProcessInvoiceOcr $job): bool => $job->invoiceId === $invoice->id && $job->companyId === $company->id);
 
         $this->actingAs($manager)
             ->get(route('companies.invoices.index', $company))
@@ -46,7 +51,7 @@ class InvoiceIntakeTest extends TestCase
                 ->where('canUploadInvoices', true)
                 ->where('invoices.total', 1)
                 ->where('invoices.data.0.original_filename', 'facture.png')
-                ->where('invoices.data.0.status', 'uploaded'))
+                ->where('invoices.data.0.status', 'ocr_queued'))
             ->assertDontSee($invoice->file_path);
 
         $this->actingAs($manager)
@@ -58,6 +63,7 @@ class InvoiceIntakeTest extends TestCase
     public function test_same_company_duplicate_requires_explicit_confirmation_before_storage(): void
     {
         Storage::fake('local');
+        Queue::fake();
 
         $company = Company::factory()->create();
         $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
@@ -73,12 +79,14 @@ class InvoiceIntakeTest extends TestCase
 
         $this->postUpload($manager, $company, $file, confirmDuplicate: true)->assertCreated();
         $this->assertDatabaseCount('invoices', 2);
+        Queue::assertPushed(ProcessInvoiceOcr::class, 2);
         $this->assertCount(2, Storage::disk('local')->allFiles("companies/{$company->id}/invoices"));
     }
 
     public function test_invoice_pages_and_uploads_are_limited_by_company_access_and_role(): void
     {
         Storage::fake('local');
+        Queue::fake();
 
         $cabinet = Cabinet::factory()->create();
         $company = Company::factory()->create(['cabinet_id' => $cabinet->id]);
@@ -109,9 +117,63 @@ class InvoiceIntakeTest extends TestCase
         $this->assertDatabaseCount('invoices', 0);
     }
 
+    public function test_authorized_manager_can_queue_ocr_for_failed_and_legacy_uploaded_invoices(): void
+    {
+        Storage::fake('local');
+        Queue::fake();
+
+        $company = Company::factory()->create();
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $reader = $this->companyUser($company, User::COMPANY_ROLE_USER);
+        $failedInvoice = $company->invoices()->create([
+            'uploaded_by' => $manager->id,
+            'storage_disk' => 'local',
+            'file_path' => "companies/{$company->id}/invoices/failed.pdf",
+            'original_filename' => 'failed.pdf',
+            'mime_type' => 'application/pdf',
+            'size_bytes' => 10,
+            'file_sha256' => hash('sha256', 'failed'),
+            'status' => 'ocr_failed',
+            'ocr_attempts' => 2,
+            'ocr_error_code' => 'provider_unavailable',
+        ]);
+
+        $this->actingAs($reader)
+            ->post(route('companies.invoices.ocr.retry', [$company, $failedInvoice]))
+            ->assertForbidden();
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.ocr.retry', [$company, $failedInvoice]))
+            ->assertRedirect(route('companies.invoices.index', $company));
+
+        $failedInvoice->refresh();
+        $this->assertSame('ocr_queued', $failedInvoice->status);
+        $this->assertNull($failedInvoice->ocr_error_code);
+        Queue::assertPushedOn('ocr', ProcessInvoiceOcr::class, fn (ProcessInvoiceOcr $job): bool => $job->invoiceId === $failedInvoice->id);
+
+        $legacyInvoice = $company->invoices()->create([
+            'uploaded_by' => $manager->id,
+            'storage_disk' => 'local',
+            'file_path' => "companies/{$company->id}/invoices/legacy.pdf",
+            'original_filename' => 'legacy.pdf',
+            'mime_type' => 'application/pdf',
+            'size_bytes' => 10,
+            'file_sha256' => hash('sha256', 'legacy'),
+            'status' => 'uploaded',
+        ]);
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.ocr.retry', [$company, $legacyInvoice]))
+            ->assertRedirect(route('companies.invoices.index', $company));
+
+        $this->assertSame('ocr_queued', $legacyInvoice->fresh()->status);
+        Queue::assertPushed(ProcessInvoiceOcr::class, 2);
+    }
+
     public function test_an_invoice_identifier_from_another_company_cannot_be_downloaded_through_this_company_route(): void
     {
         Storage::fake('local');
+        Queue::fake();
 
         $cabinet = Cabinet::factory()->create();
         $company = Company::factory()->create(['cabinet_id' => $cabinet->id]);
@@ -131,6 +193,7 @@ class InvoiceIntakeTest extends TestCase
     public function test_duplicate_detection_is_scoped_to_the_company(): void
     {
         Storage::fake('local');
+        Queue::fake();
 
         $cabinet = Cabinet::factory()->create();
         $firstCompany = Company::factory()->create(['cabinet_id' => $cabinet->id]);

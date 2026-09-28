@@ -3,11 +3,13 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\UploadInvoiceFileRequest;
+use App\Jobs\ProcessInvoiceOcr;
 use App\Models\Company;
 use App\Models\Invoice;
 use App\Models\User;
 use App\Services\Invoices\StoreInvoiceUpload;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
@@ -37,6 +39,9 @@ class InvoiceController extends Controller
                 'total_amount',
                 'currency',
                 'status',
+                'ocr_attempts',
+                'ocr_error_message',
+                'ocr_warnings',
                 'created_at',
             ])
             ->withQueryString()
@@ -50,6 +55,9 @@ class InvoiceController extends Controller
                 'total_amount' => $invoice->total_amount,
                 'currency' => $invoice->currency,
                 'status' => $invoice->status,
+                'ocr_attempts' => $invoice->ocr_attempts,
+                'ocr_error_message' => $invoice->ocr_error_message,
+                'ocr_warnings' => $invoice->ocr_warnings ?? [],
                 'created_at' => $invoice->created_at->toIso8601String(),
                 'download_url' => route('companies.invoices.download', [$company, $invoice]),
             ]);
@@ -97,6 +105,7 @@ class InvoiceController extends Controller
                 }
 
                 $storedInvoice = $storeInvoiceUpload->handle($company, $uploader, $file, $sha256);
+                $storedInvoice->forceFill(['status' => 'ocr_queued'])->save();
 
                 return [
                     'duplicate' => null,
@@ -128,6 +137,18 @@ class InvoiceController extends Controller
         /** @var Invoice $invoice */
         $invoice = $result['invoice'];
 
+        try {
+            ProcessInvoiceOcr::dispatch($invoice->id, $company->id);
+        } catch (\Throwable) {
+            $this->markOcrQueueFailure($invoice);
+            Log::warning('Invoice OCR job could not be dispatched.', [
+                'invoice_id' => $invoice->id,
+                'company_id' => $company->id,
+            ]);
+        }
+
+        $invoice->refresh();
+
         return response()->json([
             'invoice' => [
                 'id' => $invoice->id,
@@ -135,6 +156,53 @@ class InvoiceController extends Controller
                 'status' => $invoice->status,
             ],
         ], 201);
+    }
+
+    public function retryOcr(Company $company, Invoice $invoice): RedirectResponse
+    {
+        $this->authorize('manageInvoices', $company);
+        abort_unless((int) $invoice->company_id === (int) $company->id, 404);
+
+        $canRetry = DB::transaction(function () use ($company, $invoice): bool {
+            $lockedInvoice = Invoice::query()
+                ->where('company_id', $company->id)
+                ->whereKey($invoice->id)
+                ->lockForUpdate()
+                ->first();
+
+            if ($lockedInvoice === null || ! in_array($lockedInvoice->status, ['uploaded', 'ocr_failed'], true)) {
+                return false;
+            }
+
+            $lockedInvoice->forceFill([
+                'status' => 'ocr_queued',
+                'ocr_failed_at' => null,
+                'ocr_error_code' => null,
+                'ocr_error_message' => null,
+            ])->save();
+
+            return true;
+        });
+
+        if (! $canRetry) {
+            return back()->withErrors(['ocr' => 'Seules les factures importées sans OCR ou en échec peuvent être traitées.']);
+        }
+
+        try {
+            ProcessInvoiceOcr::dispatch($invoice->id, $company->id);
+        } catch (\Throwable) {
+            $invoice->refresh();
+            $this->markOcrQueueFailure($invoice);
+
+            Log::warning('Invoice OCR retry job could not be dispatched.', [
+                'invoice_id' => $invoice->id,
+                'company_id' => $company->id,
+            ]);
+
+            return back()->withErrors(['ocr' => 'La relance OCR n’a pas pu être planifiée. Réessayez plus tard.']);
+        }
+
+        return to_route('companies.invoices.index', $company);
     }
 
     public function download(Company $company, Invoice $invoice): StreamedResponse
@@ -153,5 +221,27 @@ class InvoiceController extends Controller
                 'Cache-Control' => 'private, no-store',
             ],
         );
+    }
+
+    private function markOcrQueueFailure(Invoice $invoice): void
+    {
+        DB::transaction(function () use ($invoice): void {
+            $lockedInvoice = Invoice::query()
+                ->where('company_id', $invoice->company_id)
+                ->whereKey($invoice->id)
+                ->lockForUpdate()
+                ->first();
+
+            if ($lockedInvoice === null || $lockedInvoice->status === 'ocr_completed') {
+                return;
+            }
+
+            $lockedInvoice->forceFill([
+                'status' => 'ocr_failed',
+                'ocr_failed_at' => now(),
+                'ocr_error_code' => 'queue_unavailable',
+                'ocr_error_message' => 'Le traitement OCR n’a pas pu être planifié. Vous pouvez relancer le traitement.',
+            ])->save();
+        });
     }
 }
