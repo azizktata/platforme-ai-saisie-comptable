@@ -1,27 +1,18 @@
-# PRD — Authentification
+# PRD — Authentification et accès cabinet
 
 ## Objectif
-Protéger le tableau de bord, les documents et les factures stockées, sans inscription publique dans ce premier lot.
 
-## Parcours et comportement
+Protéger l’accès à la plateforme multi-cabinet et garantir qu’un compte authentifié reste rattaché à son cabinet et aux sociétés autorisées.
 
-1. Un invité qui demande une route métier est redirigé vers `/login`.
-2. L’utilisateur saisit son e-mail et son mot de passe. L’e-mail est normalisé en minuscules.
-3. Après cinq échecs, les tentatives sont limitées temporairement par clé e-mail + IP.
-4. Une connexion valide régénère l’identifiant de session, puis redirige vers la page demandée ou le tableau de bord.
-5. La déconnexion invalide la session et renouvelle le jeton CSRF.
-6. Chaque document appartient au compte qui l’a importé. Un autre compte reçoit une réponse interdite sur les actions de lecture, modification, téléchargement et comptabilisation.
+## Comportement
 
-## Règles métier
+- Connexion par e-mail et mot de passe via session Laravel ; les e-mails sont normalisés en minuscules.
+- Routes métier réservées aux utilisateurs authentifiés ; l’identifiant de session est renouvelé à la connexion et invalidé à la déconnexion.
+- Les tentatives de connexion sont limitées.
+- Chaque compte appartient à un cabinet (`users.cabinet_id`). Les rôles cabinet et société sont contrôlés séparément.
+- Les comptes sont provisionnés par un administrateur de cabinet ou par commande sécurisée ; aucune inscription publique n’est prévue dans le périmètre de Phase 1.
+- Les rôles d’accès société sont `invoice_manager` et `company_user`; `cabinet_admin` gère le cabinet.
 
-- Aucun endpoint public de création de compte.
-- Les comptes sont créés par `php artisan users:create` ; le prompt masque le mot de passe et impose 12 caractères minimum.
-- Le compte de démonstration `demo@example.test` / `password` n’est créé que par le seeder en `local` et `testing`. Il doit être remplacé avant toute utilisation partagée.
-- Aucun rôle, invitation, MFA ou processus de récupération de mot de passe n’est inclus.
+## Hors périmètre actuel
 
-## Critères d’acceptation
-
-- Les invités ne peuvent pas accéder aux routes métier.
-- Les identifiants corrects ouvrent une session ; les identifiants incorrects produisent une erreur de formulaire.
-- La déconnexion rend la session inutilisable.
-- Les documents d’un autre utilisateur ne peuvent pas être consultés.
+Invitations par e-mail, récupération de mot de passe, SSO, MFA et gestion avancée du cycle de vie des sessions. Ils ne doivent pas être déclarés disponibles tant qu’ils ne sont pas implémentés.

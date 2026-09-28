@@ -2,13 +2,13 @@
     "$schema": "https://getcomposer.org/schema.json",
     "name": "azizktata/platforme-ai-saisie-comptable",
     "type": "project",
-    "description": "Plateforme de saisie comptable assistée pour les factures fournisseurs.",
+    "description": "Plateforme multi-société de traitement comptable assisté par IA.",
     "keywords": ["laravel", "inertia", "comptabilite"],
     "license": "MIT",
     "require": {
-        "php": "^8.2",
+        "php": "^8.3",
         "inertiajs/inertia-laravel": "^2.0",
-        "laravel/framework": "^12.0"
+        "laravel/framework": "^13.0"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

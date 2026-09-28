@@ -1,27 +1,13 @@
-# PRD — Vue d’ensemble
+# PRD — Tableau de bord cabinet (Phase 1)
 
 ## Objectif
-Donner à l’utilisateur connecté une lecture immédiate du travail comptable et des factures qui demandent une vérification.
 
-## Contenu et comportement
+Donner à l’utilisateur une vue de son périmètre multi-société sans révéler d’entreprise non autorisée.
 
-- KPI « À vérifier » : tous les documents `needs_review` appartenant à l’utilisateur.
-- KPI « Écritures comptabilisées » et « Dépenses TTC » : écritures créées (comptabilisées) pendant le mois courant.
-- KPI « Documents reçus » : documents créés pendant le mois courant.
-- Histogramme des dépenses TTC comptabilisées sur les six derniers mois.
-- Jusqu’à quatre factures récentes en attente de revue, avec fournisseur, référence, montant et statut.
-- Tableau des six documents les plus récents ; une ligne ouvre le formulaire de vérification.
-- Action « Importer un document » disponible sans quitter la vue.
-- Les listes vides affichent un état informatif ; aucune donnée de démonstration n’est injectée dans les requêtes backend.
+## Comportement
 
-## Règles métier
-
-- Toutes les mesures sont calculées pour l’utilisateur authentifié.
-- Une dépense n’est incluse dans les montants comptabilisés que si une écriture associée existe.
-- Les mois sont calculés selon le fuseau de l’application (`Europe/Paris` par défaut).
-
-## Critères d’acceptation
-
-- Le tableau de bord est inaccessible aux invités.
-- Les montants évoluent après import et comptabilisation.
-- Les liens de documents pointent vers les factures du compte courant uniquement.
+- Un administrateur voit toutes les sociétés de son cabinet.
+- Un membre voit uniquement les sociétés liées à son compte dans `company_user_access`.
+- Chaque carte affiche les informations de profil disponibles et le rôle/volume d’accès pertinent.
+- Les états vides orientent un administrateur vers la création de société et un collaborateur vers une demande d’accès.
+- Le nombre de factures, les scores OCR, les économies de temps et les écritures seront ajoutés avec les phases facture/IA ; ils ne sont pas simulés dans les métriques serveur de Phase 1.

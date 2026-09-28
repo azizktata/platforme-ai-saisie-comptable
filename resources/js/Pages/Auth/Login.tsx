@@ -1,5 +1,5 @@
 import { Head, useForm } from '@inertiajs/react';
-import { ArrowRight, Check, Eye, EyeOff, FileText, LockKeyhole } from 'lucide-react';
+import { ArrowRight, Building2, Check, Eye, EyeOff, LockKeyhole } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
 type LoginFields = {
@@ -27,13 +27,13 @@ export default function Login() {
         </div>
         <div className="login-aside-content">
           <div className="login-eyebrow"><span /> VOTRE ESPACE COMPTABLE</div>
-          <h1>Les factures<br />bien <em>comptabilisées.</em></h1>
-          <p>Importez vos documents, vérifiez les informations essentielles et retrouvez vos écritures en un seul endroit.</p>
+          <h1>Un cabinet.<br /><em>Plusieurs sociétés.</em></h1>
+          <p>Centralisez les entreprises clientes, leurs profils comptables et les accès de votre équipe dans un espace sécurisé.</p>
           <div className="login-preview-card">
-            <div className="login-preview-top"><span>Aperçu du flux</span><span className="login-live"><i /> Exemple</span></div>
-            <div className="login-preview-row"><div className="login-preview-icon"><FileText size={15} /></div><div><strong>Atelier Mistral</strong><span>AM-2026-0921 · 28 sept.</span></div><span className="login-preview-check"><Check size={13} /></span></div>
-            <div className="login-preview-row"><div className="login-preview-icon login-preview-icon--amber"><FileText size={15} /></div><div><strong>L’Épicerie Moderne</strong><span>LEM-2026-0842 · 27 sept.</span></div><span className="login-preview-pending">À vérifier</span></div>
-            <div className="login-preview-footer"><div className="login-mini-stat"><strong>8</strong><span>documents reçus</span></div><div className="login-mini-divider" /><div className="login-mini-stat"><strong>3</strong><span>écritures validées</span></div></div>
+            <div className="login-preview-top"><span>Cabinet de démonstration</span><span className="login-live"><i /> Exemples</span></div>
+            <div className="login-preview-row"><div className="login-preview-icon"><Building2 size={15} /></div><div><strong>Atlas Informatique</strong><span>Services informatiques · TND</span></div><span className="login-preview-check"><Check size={13} /></span></div>
+            <div className="login-preview-row"><div className="login-preview-icon login-preview-icon--amber"><Building2 size={15} /></div><div><strong>Bureau El Amen</strong><span>Services professionnels · TND</span></div><span className="login-preview-pending">Société</span></div>
+            <div className="login-preview-footer"><div className="login-mini-stat"><strong>3</strong><span>sociétés d’exemple</span></div><div className="login-mini-divider" /><div className="login-mini-stat"><strong>2</strong><span>rôles d’accès</span></div></div>
           </div>
         </div>
         <div className="login-aside-footer"><span>Un suivi clair, du document à l’écriture.</span><span>© {new Date().getFullYear()} ComptaFlow</span></div>
