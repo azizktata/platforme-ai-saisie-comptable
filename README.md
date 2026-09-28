@@ -4,18 +4,18 @@ Application de traitement comptable des factures fournisseurs, destinée aux cab
 
 ## État d’implémentation
 
-Les **Phases 1 et 2** sont implémentées : fondation multi-cabinet, authentification, rôles/affectations société, retours toast et données comptables scoppées par société. L’intake de la **Phase 3** est également en place : schéma factures/lignes, import PDF/JPG/JPEG/PNG traité séparément par fichier, fichiers stockés en privé, doublons détectés par SHA-256 avec confirmation, statuts visibles et routes de téléchargement autorisées par société. Les migrations et tests Laravel doivent encore être exécutés localement avec PHP/Composer.
+Les **Phases 1 à 4** sont implémentées : fondation multi-cabinet, authentification, rôles/affectations société, données comptables scoppées, intake privé des factures et extraction Mistral OCR asynchrone, structurée et auditable. La Phase 4 ajoute files Laravel, états/tentatives, lignes extraites, messages d’échec/relance et avertissements explicites de cohérence des totaux. Les migrations et tests Laravel doivent être exécutés localement avec PHP 8.3+/Composer.
 
 La Phase 2 utilise un jeu de démonstration déterministe de type Sage (12 comptes généraux, 3 comptes analytiques, 3 tiers, 4 journaux et 2 écritures équilibrées par société). Les codes sont stockés en texte, et les montants utilisent trois décimales pour les millimes tunisiens. Aucune base Sage ni aucun fichier `.mae` réel n’a été fourni : la synchronisation/import réel reste différé.
 
-L’OCR asynchrone Mistral (Phase 4), l’analyse Mistral Small, la proposition en partie double et la validation humaine (Phase 5) restent à implémenter ; l’import ne déclenche pour l’instant aucun traitement IA et les champs extraits restent vides. La présence d’une variable `MISTRAL_API_KEY` dans `.env.example` ne signifie pas qu’un appel IA est effectué. Le connecteur et l’export Sage réel attendent l’inspection du fichier `.mae` et la confirmation de la version Sage.
+La Phase 4 s’arrête à l’extraction OCR : aucune analyse Mistral Small, proposition comptable en partie double, validation humaine ou écriture comptable n’est encore implémentée (Phase 5). L’OCR utilise une clé Mistral serveur configurable ; les documents ne quittent le stockage privé que dans une requête vers le endpoint configuré. Le connecteur et l’export Sage réel attendent l’inspection du fichier `.mae` et la confirmation de la version Sage.
 
 ## Stack
 
 - PHP 8.3+, Laravel 13, Composer
 - MySQL pour l’application ; SQLite en mémoire pour les tests
 - Inertia.js, React 19, TypeScript, Tailwind CSS
-- Les queues Laravel et les fournisseurs Mistral seront activés aux phases de traitement asynchrone.
+- La Phase 4 utilise la queue Laravel `database` et l’API Mistral OCR (`mistral-ocr-latest` par défaut) ; une clé serveur et un worker actif sont nécessaires pour traiter les jobs.
 
 ## Prérequis
 
@@ -37,6 +37,14 @@ php artisan migrate --seed
 
 Le seeder crée un cabinet d’exemple, trois sociétés fictives, un administrateur et leurs référentiels/écritures comptables de démonstration en environnement `local` ou `testing` uniquement. Une nouvelle société peut charger le même jeu depuis « Données comptables » en environnement local/test, avec un rôle administrateur de cabinet ou gestionnaire de factures. Cette action est masquée et refusée hors de ces environnements. Valeurs locales par défaut : `demo@example.test` / `password`. Changez-les avant d’exposer un environnement ; ne réutilisez jamais ces identifiants en production.
 
+Pour activer l’OCR, configurez `MISTRAL_API_KEY` côté serveur dans `.env`, puis démarrez un worker Laravel dans un terminal distinct :
+
+```bash
+php artisan queue:work database --queue=ocr --tries=3 --timeout=210
+```
+
+`DB_QUEUE_RETRY_AFTER=300` doit rester supérieur au timeout du job. Sans clé Mistral, les uploads restent privés mais les jobs échouent rapidement avec une erreur visible et peuvent être relancés après configuration. N’exposez jamais la clé au navigateur. Consultez [`docs/modules/invoice-processing/README.md`](docs/modules/invoice-processing/README.md) pour le détail de l’API, des états et du contrôle des totaux.
+
 Lancez Vite et Laravel dans deux terminaux :
 
 ```bash
@@ -54,11 +62,13 @@ Le serveur Vite de l’application écoute sur `127.0.0.1:5173` en port strict. 
 
 Les succès des mutations (connexion/déconnexion, sociétés, profils et accès utilisateurs) affichent un toast Sonner ; les erreurs de validation et les réponses réseau/serveur inattendues affichent un toast d’erreur. L’import de factures confirme les réussites et signale les fichiers refusés individuellement sans annuler les autres. La liste des utilisateurs masque entièrement la section « Accès société » lorsque le rôle choisi est `cabinet_admin`.
 
-## Intake de factures (Phase 3)
+## Intake et OCR des factures (Phases 3–4)
 
-Depuis « Factures » sur une société, un administrateur de cabinet ou gestionnaire autorisé peut sélectionner jusqu’à 300 fichiers. Chaque PDF/JPG/JPEG/PNG (20 Mo max.) est envoyé séparément, validé côté serveur, enregistré dans `storage/app/private` avec un SHA-256 et apparaît avec l’état « Reçue · OCR à venir ». Un hash déjà présent dans la même société renvoie une demande de confirmation avant tout nouvel enregistrement. Les utilisateurs société autorisés peuvent consulter et télécharger les documents, sans pouvoir importer s’ils n’ont pas le rôle requis.
+Depuis « Factures » sur une société, un administrateur de cabinet ou gestionnaire autorisé peut sélectionner jusqu’à 300 fichiers. Chaque PDF/JPG/JPEG/PNG (20 Mo max.) est envoyé séparément, validé côté serveur et enregistré dans `storage/app/private` avec un SHA-256 ; un hash déjà présent dans la même société exige une confirmation. Les utilisateurs société autorisés peuvent consulter et télécharger les documents privés, sans pouvoir importer s’ils n’ont pas le rôle requis.
 
-L’import n’exécute pas encore d’OCR, d’analyse IA, de rapprochement fournisseur ou de validation comptable. Les anciennes tables du prototype sont conservées sans migration automatique vers le nouveau schéma. La documentation du module est dans [`docs/modules/documents/`](docs/modules/documents/).
+Chaque nouvel import est mis en file sur `ocr` après persistance. Le worker envoie le document au Mistral OCR configurable, valide le JSON strict, puis persiste la réponse brute, les champs et les lignes extraits, le modèle/usage ainsi que les erreurs/tentatives. L’interface actualise l’avancement et permet une relance autorisée. Les totaux incohérents ou non vérifiables sont signalés ; aucun montant n’est corrigé automatiquement. Les factures importées sous l’ancien état `uploaded` peuvent être lancées manuellement depuis l’interface.
+
+Les résultats OCR nécessitent une vérification humaine ; aucune analyse Mistral Small, proposition comptable ou écriture validée n’est créée (Phase 5). Les anciennes tables du prototype sont conservées sans migration automatique vers le nouveau schéma. La documentation détaillée est dans [`docs/modules/documents/`](docs/modules/documents/) et [`docs/modules/invoice-processing/`](docs/modules/invoice-processing/).
 
 ### Aperçu UI sans PHP/MySQL
 
@@ -75,7 +85,7 @@ npm run build
 composer test
 ```
 
-Les tests Laravel configurent SQLite en mémoire. Pour les phases futures, les tests de services/jobs IA devront utiliser des réponses HTTP simulées et ne doivent pas nécessiter une clé Mistral réelle.
+Les tests Laravel configurent SQLite en mémoire. Les tests OCR simulent les réponses Mistral avec `Http::fake()` et ne nécessitent aucune clé réelle. Dans cet environnement PHP/Composer doit être disponible pour exécuter `composer test`.
 
 ## Structure utile
 
@@ -84,6 +94,8 @@ app/Models/                 Cabinet, User, Company, factures et référentiels/�
 app/Policies/               Autorisations d’accès aux sociétés et données métier
 app/Services/AccountingData/ Service idempotent des données comptables d’exemple
 app/Services/Invoices/      Stockage privé et persistance des imports de facture
+app/Services/Ocr/           Contrat Mistral, schéma structuré et cohérence des totaux
+app/Jobs/                   Traitement OCR indépendant par facture
 app/Http/Controllers/       Auth, tableau de bord, société, comptabilité et factures
 app/Http/Requests/          Validation serveur des formulaires et uploads
 resources/js/Pages/         Pages Inertia React, dont AccountingData/Show et Invoices/Index

@@ -31,6 +31,8 @@ class Invoice extends Model
         'invoice_date',
         'due_date',
         'currency',
+        'vat_rate',
+        'fodec_rate',
         'subtotal',
         'vat_amount',
         'fodec_amount',
@@ -44,6 +46,17 @@ class Invoice extends Model
         'bank_account_reference',
         'description',
         'status',
+        'ocr_response',
+        'ocr_data',
+        'ocr_usage',
+        'ocr_warnings',
+        'ocr_model',
+        'ocr_attempts',
+        'ocr_started_at',
+        'ocr_completed_at',
+        'ocr_failed_at',
+        'ocr_error_code',
+        'ocr_error_message',
     ];
 
     protected function casts(): array
@@ -55,6 +68,8 @@ class Invoice extends Model
             'size_bytes' => 'integer',
             'invoice_date' => 'date',
             'due_date' => 'date',
+            'vat_rate' => 'decimal:3',
+            'fodec_rate' => 'decimal:3',
             'subtotal' => 'decimal:3',
             'vat_amount' => 'decimal:3',
             'fodec_amount' => 'decimal:3',
@@ -63,6 +78,14 @@ class Invoice extends Model
             'withholding_rate' => 'decimal:3',
             'withholding_amount' => 'decimal:3',
             'total_amount' => 'decimal:3',
+            'ocr_response' => 'array',
+            'ocr_data' => 'array',
+            'ocr_usage' => 'array',
+            'ocr_warnings' => 'array',
+            'ocr_attempts' => 'integer',
+            'ocr_started_at' => 'datetime',
+            'ocr_completed_at' => 'datetime',
+            'ocr_failed_at' => 'datetime',
         ];
     }
 

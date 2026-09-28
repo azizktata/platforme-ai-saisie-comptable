@@ -1,5 +1,5 @@
 <?php
 
 return [
-    // Application service providers can be registered here.
+    App\Providers\AppServiceProvider::class,
 ];

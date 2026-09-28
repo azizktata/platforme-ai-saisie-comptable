@@ -30,6 +30,8 @@ Route::middleware('auth')->group(function (): void {
         ->name('companies.invoices.index');
     Route::post('/companies/{company}/invoices/upload', [InvoiceController::class, 'upload'])
         ->name('companies.invoices.upload');
+    Route::post('/companies/{company}/invoices/{invoice}/ocr/retry', [InvoiceController::class, 'retryOcr'])
+        ->name('companies.invoices.ocr.retry');
     Route::get('/companies/{company}/invoices/{invoice}/file', [InvoiceController::class, 'download'])
         ->name('companies.invoices.download');
     Route::get('/cabinet/users', [CabinetUserController::class, 'index'])->name('cabinet.users.index');

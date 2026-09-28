@@ -1,6 +1,6 @@
 import { Head, Link, router } from '@inertiajs/react';
-import { ArrowDownToLine, FileText, LoaderCircle, Upload, X } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { ArrowDownToLine, FileText, LoaderCircle, RotateCcw, Upload, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import AppShell from '../../Components/AppShell';
 import type { SharedAuthProps } from '../../types';
@@ -15,6 +15,9 @@ type InvoiceSummary = {
   total_amount: string | null;
   currency: string | null;
   status: string;
+  ocr_attempts: number;
+  ocr_error_message: string | null;
+  ocr_warnings: string[];
   created_at: string;
   download_url: string;
 };
@@ -57,6 +60,25 @@ export default function InvoicesIndex({ company, invoices, canUploadInvoices, au
   const [uploadProgress, setUploadProgress] = useState({ completed: 0, total: 0 });
   const [confirmDuplicates, setConfirmDuplicates] = useState(false);
   const [uploadFailures, setUploadFailures] = useState<InvoiceUploadFailure[]>([]);
+  const hasPendingOcr = invoices.data.some((invoice) => ['ocr_queued', 'ocr_processing'].includes(invoice.status));
+
+  useEffect(() => {
+    if (!hasPendingOcr) return;
+
+    const interval = window.setInterval(() => {
+      router.reload({ only: ['invoices'] });
+    }, 5000);
+
+    return () => window.clearInterval(interval);
+  }, [hasPendingOcr]);
+
+  const retryOcr = (invoiceId: number) => {
+    router.post(`/companies/${company.id}/invoices/${invoiceId}/ocr/retry`, {}, {
+      preserveScroll: true,
+      onSuccess: () => toast.success('Relance OCR planifiée.'),
+      onError: () => toast.error('La relance OCR n’a pas pu être planifiée.'),
+    });
+  };
 
   const chooseFiles = (files: FileList | null) => {
     const nextFiles = Array.from(files ?? []);
@@ -164,7 +186,7 @@ export default function InvoicesIndex({ company, invoices, canUploadInvoices, au
           <p className="text-sm font-semibold uppercase tracking-[0.16em] text-teal-700">{company.name}</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Factures</h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-            Importez des PDF ou images. Chaque fichier est transmis et enregistré séparément afin qu’un échec ne bloque pas le reste du lot.
+            Importez des PDF ou images. Chaque fichier est traité séparément par l’OCR Mistral après son enregistrement ; les résultats restent à vérifier et aucune écriture comptable n’est générée automatiquement.
           </p>
         </header>
 
@@ -240,7 +262,7 @@ export default function InvoicesIndex({ company, invoices, canUploadInvoices, au
             </button>
 
             <p className="mt-3 text-xs leading-5 text-slate-500">
-              Les fichiers sont conservés dans le stockage privé de la plateforme. L’OCR et l’analyse ne sont pas lancés dans cette phase.
+              Les originaux restent dans le stockage privé. L’OCR démarre en arrière-plan ; les champs extraits et montants doivent toujours être vérifiés. Aucune proposition comptable n’est générée à cette phase.
             </p>
           </section>
         ) : (
@@ -280,7 +302,7 @@ export default function InvoicesIndex({ company, invoices, canUploadInvoices, au
                     <th className="px-5 py-3 font-semibold">Date facture</th>
                     <th className="px-5 py-3 font-semibold text-right">Total</th>
                     <th className="px-5 py-3 font-semibold">État</th>
-                    <th className="px-5 py-3 font-semibold"><span className="sr-only">Téléchargement</span></th>
+                    <th className="px-5 py-3 font-semibold"><span className="sr-only">Actions</span></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -296,11 +318,36 @@ export default function InvoicesIndex({ company, invoices, canUploadInvoices, au
                       </td>
                       <td className="whitespace-nowrap px-5 py-3 text-slate-600">{invoice.invoice_date ? formatDate(invoice.invoice_date) : '—'}</td>
                       <td className="whitespace-nowrap px-5 py-3 text-right tabular-nums text-slate-700">{formatAmount(invoice.total_amount, invoice.currency || company.currency)}</td>
-                      <td className="px-5 py-3"><StatusBadge status={invoice.status} /></td>
-                      <td className="px-5 py-3 text-right">
-                        <a href={invoice.download_url} className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-teal-800 hover:border-teal-300 hover:bg-teal-50">
-                          <ArrowDownToLine size={14} /> Télécharger
-                        </a>
+                      <td className="min-w-40 px-5 py-3">
+                        <StatusBadge status={invoice.status} />
+                        {invoice.status === 'ocr_failed' && (
+                          <p className="mt-1 max-w-64 text-xs leading-4 text-red-700">
+                            {invoice.ocr_error_message || 'Le traitement OCR a échoué.'}
+                            {invoice.ocr_attempts > 0 && <span className="block text-red-600">Tentatives : {invoice.ocr_attempts}</span>}
+                          </p>
+                        )}
+                        {invoice.ocr_warnings.includes('invoice_total_mismatch') && (
+                          <p className="mt-1 max-w-64 text-xs leading-4 text-red-700">Incohérence de total détectée. Vérifiez les montants extraits et le document original.</p>
+                        )}
+                        {invoice.ocr_warnings.includes('invoice_totals_unverified') && (
+                          <p className="mt-1 max-w-64 text-xs leading-4 text-amber-800">Contrôle des totaux non conclusif : des montants nécessaires sont absents ou illisibles.</p>
+                        )}
+                      </td>
+                      <td className="min-w-52 px-5 py-3 text-right">
+                        <div className="flex flex-wrap justify-end gap-2">
+                          {canUploadInvoices && ['uploaded', 'ocr_failed'].includes(invoice.status) && (
+                            <button
+                              type="button"
+                              onClick={() => retryOcr(invoice.id)}
+                              className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 px-2.5 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-50"
+                            >
+                              <RotateCcw size={14} /> {invoice.status === 'uploaded' ? 'Démarrer OCR' : 'Relancer OCR'}
+                            </button>
+                          )}
+                          <a href={invoice.download_url} className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-teal-800 hover:border-teal-300 hover:bg-teal-50">
+                            <ArrowDownToLine size={14} /> Télécharger
+                          </a>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -323,10 +370,26 @@ export default function InvoicesIndex({ company, invoices, canUploadInvoices, au
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const isUploaded = status === 'uploaded';
+  const labels: Record<string, string> = {
+    uploaded: 'Importée · en attente OCR',
+    ocr_queued: 'OCR en attente',
+    ocr_processing: 'OCR en cours',
+    ocr_completed: 'OCR terminé · à vérifier',
+    ocr_failed: 'Échec OCR',
+  };
+  const tone = status === 'ocr_completed'
+    ? 'bg-emerald-50 text-emerald-800'
+    : status === 'ocr_failed'
+      ? 'bg-red-50 text-red-800'
+      : status === 'ocr_queued' || status === 'ocr_processing'
+        ? 'bg-amber-50 text-amber-900'
+        : 'bg-sky-50 text-sky-800';
+  const isPending = status === 'ocr_queued' || status === 'ocr_processing';
+
   return (
-    <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${isUploaded ? 'bg-sky-50 text-sky-800' : 'bg-slate-100 text-slate-600'}`}>
-      {isUploaded ? 'Reçue · OCR à venir' : status}
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>
+      {isPending && <LoaderCircle className="animate-spin" size={13} />}
+      {labels[status] || status}
     </span>
   );
 }
