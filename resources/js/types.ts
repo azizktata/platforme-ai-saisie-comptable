@@ -16,10 +16,6 @@ export type SharedAuthProps = {
   canManageCabinet?: boolean;
 };
 
-export type FlashProps = {
-  success?: string | null;
-};
-
 export type CompanySummary = {
   id: number;
   name: string;

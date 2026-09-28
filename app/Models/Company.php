@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Company extends Model
 {
@@ -40,5 +41,30 @@ class Company extends Model
         return $this->belongsToMany(User::class, 'company_user_access')
             ->withPivot('role')
             ->withTimestamps();
+    }
+
+    public function chartAccounts(): HasMany
+    {
+        return $this->hasMany(ChartAccount::class);
+    }
+
+    public function analyticalAccounts(): HasMany
+    {
+        return $this->hasMany(AnalyticalAccount::class);
+    }
+
+    public function thirdParties(): HasMany
+    {
+        return $this->hasMany(ThirdParty::class);
+    }
+
+    public function journals(): HasMany
+    {
+        return $this->hasMany(Journal::class);
+    }
+
+    public function journalEntries(): HasMany
+    {
+        return $this->hasMany(JournalEntry::class);
     }
 }

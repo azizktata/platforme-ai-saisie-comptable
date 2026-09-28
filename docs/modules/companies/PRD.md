@@ -14,4 +14,5 @@ Nom d’usage, raison sociale, matricule fiscal, activité, secteur, code pays, 
 - Les membres ne voient que les sociétés affectées.
 - Un nom de société doit être unique au sein de son cabinet ; un autre cabinet peut réutiliser le même nom.
 - L’administrateur peut créer et modifier le profil d’une société ; la suppression reste désactivée pour éviter la perte de données comptables futures.
-- Le connecteur Sage et l’import comptable seront ajoutés après inspection du format disponible.
+- Les créations/modifications affichent un toast de succès ou d’échec. Les utilisateurs disposant d’un accès société peuvent ouvrir ses « Données comptables » depuis la carte de profil.
+- Le connecteur Sage et l’import comptable réel restent différés jusqu’à inspection du format disponible.

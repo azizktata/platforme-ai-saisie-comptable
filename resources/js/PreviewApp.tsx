@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Building2, Users } from 'lucide-react';
+import { ArrowRight, BookOpenText, Building2, Users } from 'lucide-react';
 import AppShell from './Components/AppShell';
 import type { CabinetUserSummary, CompanySummary } from './types';
 
@@ -24,8 +24,10 @@ export default function PreviewApp() {
     setPath(href);
   };
 
-  const activeSection = path === '/companies' ? 'companies' : path === '/cabinet/users' ? 'users' : 'overview';
-  const title = activeSection === 'companies' ? 'Sociétés' : activeSection === 'users' ? 'Utilisateurs' : 'Vue d’ensemble';
+  const activeSection = path.includes('/accounting-data') ? 'accounting' : path === '/companies' ? 'companies' : path === '/cabinet/users' ? 'users' : 'overview';
+  const title = activeSection === 'accounting' ? 'Données comptables' : activeSection === 'companies' ? 'Sociétés' : activeSection === 'users' ? 'Utilisateurs' : 'Vue d’ensemble';
+  const companyId = Number(path.match(/\/companies\/(\d+)\/accounting-data/)?.[1]);
+  const selectedCompany = companies.find((company) => company.id === companyId);
 
   return (
     <AppShell
@@ -49,7 +51,7 @@ export default function PreviewApp() {
               <Summary label="Utilisateurs du cabinet" value={users.length} />
               <Summary label="Données Sage" value="Phase 2" />
             </div>
-            <CompanyCards companies={companies} />
+            <CompanyCards companies={companies} onNavigate={navigate} />
           </>
         )}
 
@@ -74,8 +76,12 @@ export default function PreviewApp() {
                 className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800"
               >Ajouter un exemple</button>
             </div>
-            <CompanyCards companies={companies} />
+            <CompanyCards companies={companies} onNavigate={navigate} />
           </>
+        )}
+
+        {activeSection === 'accounting' && selectedCompany && (
+          <AccountingPreview company={selectedCompany} />
         )}
 
         {activeSection === 'users' && (
@@ -96,11 +102,53 @@ export default function PreviewApp() {
   );
 }
 
+function AccountingPreview({ company }: { company: CompanySummary }) {
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-start justify-between gap-4 rounded-xl border border-sky-200 bg-sky-50 p-5">
+        <div>
+          <p className="flex items-center gap-2 text-sm font-semibold text-sky-900"><BookOpenText size={17} /> Référentiels propres à {company.name}</p>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-sky-800">Données comptables simulées pour illustrer le contexte Sage. Aucun fichier .mae n’a été fourni et aucun import réel n’a été effectué.</p>
+        </div>
+        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-sky-800">Exemple local</span>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <Summary label="Comptes généraux" value={12} />
+        <Summary label="Comptes analytiques" value={3} />
+        <Summary label="Tiers" value={3} />
+        <Summary label="Journaux" value={4} />
+        <Summary label="Écritures historiques" value={2} />
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <article className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <header className="border-b border-slate-100 px-5 py-4"><h2 className="font-semibold text-slate-900">Plan comptable</h2><p className="mt-1 text-xs text-slate-500">Codes conservés sous forme de texte, y compris les zéros initiaux.</p></header>
+          <table className="min-w-full text-left text-sm"><tbody className="divide-y divide-slate-100">
+            {[
+              ['401000', 'Fournisseurs'],
+              ['411000', 'Clients'],
+              ['445660', 'TVA déductible'],
+              ['606400', 'Fournitures administratives'],
+              ['000012', 'Compte auxiliaire de démonstration'],
+            ].map(([code, label]) => <tr key={code}><td className="px-5 py-3 font-mono text-xs font-semibold text-slate-700">{code}</td><td className="px-5 py-3 text-slate-600">{label}</td></tr>)}
+          </tbody></table>
+        </article>
+        <article className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <header className="border-b border-slate-100 px-5 py-4"><h2 className="font-semibold text-slate-900">Journaux et écritures</h2><p className="mt-1 text-xs text-slate-500">Historique équilibré, stocké par société.</p></header>
+          <div className="divide-y divide-slate-100">
+            <div className="px-5 py-4"><div className="flex justify-between gap-3"><strong className="font-mono text-sm text-slate-800">ACH-2026-001</strong><span className="text-xs text-slate-500">ACH · Achats</span></div><p className="mt-1 text-sm text-slate-600">Maintenance du parc informatique</p><p className="mt-2 text-xs font-medium text-emerald-700">Débit 119,000 {company.currency} · Crédit 119,000 {company.currency}</p></div>
+            <div className="px-5 py-4"><div className="flex justify-between gap-3"><strong className="font-mono text-sm text-slate-800">VTE-2026-004</strong><span className="text-xs text-slate-500">VTE · Ventes</span></div><p className="mt-1 text-sm text-slate-600">Vente à Carthage Négoce</p><p className="mt-2 text-xs font-medium text-emerald-700">Débit 238,000 {company.currency} · Crédit 238,000 {company.currency}</p></div>
+          </div>
+        </article>
+      </div>
+    </div>
+  );
+}
+
 function Summary({ label, value }: { label: string; value: string | number }) {
   return <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><p className="text-sm text-slate-500">{label}</p><p className="mt-2 text-2xl font-semibold text-slate-900">{value}</p></div>;
 }
 
-function CompanyCards({ companies }: { companies: CompanySummary[] }) {
+function CompanyCards({ companies, onNavigate }: { companies: CompanySummary[]; onNavigate: (href: string) => void }) {
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       {companies.map((company) => (
@@ -109,6 +157,7 @@ function CompanyCards({ companies }: { companies: CompanySummary[] }) {
           <h2 className="mt-4 font-semibold text-slate-900">{company.name}</h2>
           <p className="mt-1 text-sm text-slate-500">{company.activity || 'Activité non renseignée'}</p>
           <div className="mt-4 flex justify-between border-t border-slate-100 pt-3 text-xs text-slate-500"><span>{company.tax_identifier || 'Matricule fiscal à renseigner'}</span><span>{company.currency}</span></div>
+          <button type="button" onClick={() => onNavigate(`/companies/${company.id}/accounting-data`)} className="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-teal-700 hover:text-teal-900">Données comptables <ArrowRight size={15} /></button>
         </article>
       ))}
     </div>

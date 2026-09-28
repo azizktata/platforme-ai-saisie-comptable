@@ -24,9 +24,6 @@ class HandleInertiaRequests extends Middleware
                 'cabinet' => $user?->cabinet?->only('id', 'name', 'slug'),
                 'canManageCabinet' => $user?->isCabinetAdmin() ?? false,
             ],
-            'flash' => [
-                'success' => fn () => $request->session()->get('success'),
-            ],
         ]);
     }
 }

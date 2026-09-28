@@ -65,5 +65,7 @@ class DatabaseSeeder extends Seeder
                 $companyData + ['country_code' => 'TN', 'currency' => 'TND'],
             );
         }
+
+        $this->call(AccountingDataSeeder::class);
     }
 }

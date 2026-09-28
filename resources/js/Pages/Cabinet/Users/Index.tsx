@@ -1,8 +1,9 @@
 import { router, useForm } from '@inertiajs/react';
 import { KeyRound, ShieldCheck, UserPlus, Users } from 'lucide-react';
 import type { FormEvent, ReactNode } from 'react';
+import { toast } from 'sonner';
 import AppShell from '../../../Components/AppShell';
-import type { CabinetUserSummary, FlashProps, SelectableCompany, SharedAuthProps } from '../../../types';
+import type { CabinetUserSummary, SelectableCompany, SharedAuthProps } from '../../../types';
 
 type CompanyRole = 'invoice_manager' | 'company_user';
 type CompanyAccessInput = { company_id: number; role: CompanyRole };
@@ -17,12 +18,11 @@ type Props = {
   users: CabinetUserSummary[];
   companies: SelectableCompany[];
   auth?: SharedAuthProps;
-  flash?: FlashProps;
 };
 
 const inputClass = 'mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-teal-600 focus:ring-2 focus:ring-teal-100';
 
-export default function CabinetUsersIndex({ users, companies, auth, flash }: Props) {
+export default function CabinetUsersIndex({ users, companies, auth }: Props) {
   const form = useForm<UserForm>({
     name: '',
     email: '',
@@ -33,7 +33,14 @@ export default function CabinetUsersIndex({ users, companies, auth, flash }: Pro
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    form.post('/cabinet/users', { preserveScroll: true, onSuccess: () => form.reset() });
+    form.post('/cabinet/users', {
+      preserveScroll: true,
+      onSuccess: () => {
+        form.reset();
+        toast.success('Utilisateur ajouté au cabinet.');
+      },
+      onError: () => toast.error('L’utilisateur n’a pas pu être créé. Vérifiez les champs indiqués.'),
+    });
   };
 
   const toggleCompany = (companyId: number, selected: boolean) => {
@@ -53,8 +60,10 @@ export default function CabinetUsersIndex({ users, companies, auth, flash }: Pro
       cabinetName={auth?.cabinet?.name}
       canManageCabinet={auth?.canManageCabinet}
       user={auth?.user}
-      successMessage={flash?.success}
-      onLogout={auth?.user ? () => router.post('/logout') : undefined}
+      onLogout={auth?.user ? () => router.post('/logout', {}, {
+        onSuccess: () => toast.success('Déconnexion réussie.'),
+        onError: () => toast.error('La déconnexion a échoué. Réessayez.'),
+      }) : undefined}
     >
       <section className="mx-auto max-w-7xl space-y-6">
         <header>
@@ -79,7 +88,15 @@ export default function CabinetUsersIndex({ users, companies, auth, flash }: Pro
               <input className={inputClass} type="password" value={form.data.password} onChange={(event) => form.setData('password', event.target.value)} autoComplete="new-password" minLength={12} required />
             </Field>
             <Field label="Rôle cabinet" error={form.errors.cabinet_role}>
-              <select className={inputClass} value={form.data.cabinet_role} onChange={(event) => form.setData('cabinet_role', event.target.value as UserForm['cabinet_role'])}>
+              <select
+                className={inputClass}
+                value={form.data.cabinet_role}
+                onChange={(event) => {
+                  const role = event.target.value as UserForm['cabinet_role'];
+                  form.setData('cabinet_role', role);
+                  if (role === 'cabinet_admin') form.setData('company_access', []);
+                }}
+              >
                 <option value="member">Collaborateur</option>
                 <option value="cabinet_admin">Administrateur du cabinet</option>
               </select>
@@ -186,7 +203,11 @@ function MemberAccessEditor({ member, companies }: { member: CabinetUserSummary;
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    form.put(`/cabinet/users/${member.id}`, { preserveScroll: true });
+    form.put(`/cabinet/users/${member.id}`, {
+      preserveScroll: true,
+      onSuccess: () => toast.success('Accès utilisateur mis à jour.'),
+      onError: () => toast.error('Les accès n’ont pas pu être enregistrés. Vérifiez les champs indiqués.'),
+    });
   };
 
   const toggleCompany = (companyId: number, selected: boolean) => {
@@ -214,13 +235,22 @@ function MemberAccessEditor({ member, companies }: { member: CabinetUserSummary;
           <input className={inputClass} type="password" value={form.data.password} onChange={(event) => form.setData('password', event.target.value)} minLength={12} autoComplete="new-password" />
         </Field>
         <Field label="Rôle cabinet" error={form.errors.cabinet_role}>
-          <select className={inputClass} value={form.data.cabinet_role} onChange={(event) => form.setData('cabinet_role', event.target.value as UserForm['cabinet_role'])}>
+          <select
+            className={inputClass}
+            value={form.data.cabinet_role}
+            onChange={(event) => {
+              const role = event.target.value as UserForm['cabinet_role'];
+              form.setData('cabinet_role', role);
+              if (role === 'cabinet_admin') form.setData('company_access', []);
+            }}
+          >
             <option value="member">Collaborateur</option>
             <option value="cabinet_admin">Administrateur du cabinet</option>
           </select>
         </Field>
-        <fieldset className="space-y-2 rounded-lg border border-slate-200 p-3">
-            <legend className="px-1 text-xs font-medium text-slate-600">Accès société (les admins ont aussi l’accès global)</legend>
+        {form.data.cabinet_role === 'member' && (
+          <fieldset className="space-y-2 rounded-lg border border-slate-200 p-3">
+            <legend className="px-1 text-xs font-medium text-slate-600">Accès société</legend>
             {companies.map((company) => {
               const access = form.data.company_access.find((item) => item.company_id === company.id);
 
@@ -241,6 +271,7 @@ function MemberAccessEditor({ member, companies }: { member: CabinetUserSummary;
             })}
             {form.errors.company_access && <p className="text-xs text-red-700">{form.errors.company_access}</p>}
           </fieldset>
+        )}
         <button type="submit" disabled={form.processing} className="rounded-lg border border-teal-700 px-3 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:opacity-60">
           {form.processing ? 'Enregistrement…' : 'Enregistrer les accès'}
         </button>

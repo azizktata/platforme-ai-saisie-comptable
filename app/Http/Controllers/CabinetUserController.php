@@ -46,7 +46,9 @@ class CabinetUserController extends Controller
     public function store(StoreCabinetUserRequest $request): RedirectResponse
     {
         $data = $request->validated();
-        $companyAccess = $data['company_access'] ?? [];
+        $companyAccess = $data['cabinet_role'] === User::CABINET_ROLE_ADMIN
+            ? []
+            : ($data['company_access'] ?? []);
         unset($data['company_access']);
 
         DB::transaction(function () use ($request, $data, $companyAccess): void {
@@ -56,13 +58,15 @@ class CabinetUserController extends Controller
             ])->all());
         });
 
-        return to_route('cabinet.users.index')->with('success', 'Utilisateur ajouté au cabinet.');
+        return to_route('cabinet.users.index');
     }
 
     public function update(UpdateCabinetUserRequest $request, User $user): RedirectResponse
     {
         $data = $request->validated();
-        $companyAccess = $data['company_access'];
+        $companyAccess = $data['cabinet_role'] === User::CABINET_ROLE_ADMIN
+            ? []
+            : $data['company_access'];
         unset($data['company_access']);
 
         if (blank($data['password'] ?? null)) {
@@ -76,6 +80,6 @@ class CabinetUserController extends Controller
             ])->all());
         });
 
-        return to_route('cabinet.users.index')->with('success', 'Accès utilisateur mis à jour.');
+        return to_route('cabinet.users.index');
     }
 }
