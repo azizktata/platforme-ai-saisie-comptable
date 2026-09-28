@@ -35,7 +35,7 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
         public int $invoiceId,
         public int $companyId,
     ) {
-        $this->onQueue('ocr');
+        $this->onConnection('database')->onQueue('ocr');
     }
 
     public function uniqueId(): string
@@ -96,6 +96,7 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
                 'invoice_id' => $invoice->id,
                 'company_id' => $invoice->company_id,
                 'error_code' => $exception->errorCode,
+                'transport_error' => $exception->diagnostic,
                 'attempt' => $invoice->ocr_attempts,
             ]);
 

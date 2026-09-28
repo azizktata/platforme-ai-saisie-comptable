@@ -24,4 +24,9 @@ class Cabinet extends Model
     {
         return $this->hasMany(Company::class);
     }
+
+    public function activities(): HasMany
+    {
+        return $this->hasMany(CabinetActivity::class);
+    }
 }

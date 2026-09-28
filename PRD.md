@@ -4,7 +4,7 @@
 
 Le cahier des charges et le prompt d’implémentation fournis par le client sont désormais consignés dans [`docs/requirements.md`](docs/requirements.md) et pilotent les décisions du produit. Ils remplacent le périmètre provisoire de saisie manuelle livré dans le premier commit.
 
-**État actuel : Phases 1 et 2 implémentées ; l’intake de la Phase 3 est en place.** La fondation multi-cabinet, les rôles/affectations, les retours toast, les référentiels comptables par société et le socle des factures sont présents. La Phase 3 fournit les tables `invoices`/`invoice_lines`, un import PDF/JPG/JPEG/PNG indépendant par fichier, un stockage privé, une détection de doublons SHA-256 avec confirmation et une liste sécurisée par société. Le traitement OCR, l’analyse comptable et la validation humaine restent différés. Aucune base Sage ni fichier `.mae` réel n’a été fourni. Les migrations et tests Laravel restent à exécuter dans un environnement avec PHP 8.3 et Composer.
+**État actuel : les Phases 1 à 4 sont implémentées ; leur exécution Laravel reste à vérifier dans un environnement PHP/Composer.** La fondation multi-cabinet inclut l’inscription d’un cabinet et de son premier administrateur, les paramètres de cabinet, les rôles/affectations, un catalogue d’activités prédéfinies et personnalisées par cabinet, ainsi que des retours toast. La Phase 2 fournit les référentiels comptables par société et des données d’exemple. Les Phases 3–4 fournissent l’intake privé des factures, l’OCR Mistral asynchrone, les états/erreurs, les avertissements de totaux, les espaces globaux « Factures » et « Données comptables », l’historique facture par société, l’export CSV de la sélection et le suivi de vérification de l’extraction OCR. Aucune base Sage ni fichier `.mae` réel n’a été fourni. PHP/Composer ne sont pas disponibles dans l’environnement de travail actuel : les migrations et tests Laravel n’y ont pas été exécutés.
 
 ## Vision
 
@@ -36,6 +36,7 @@ Transformer une facture fournisseur en proposition comptable vérifiable et cont
 - Les comptes et codes sont des chaînes, jamais convertis en entiers ; l’IA ne propose que des comptes existants de la société.
 - L’écriture comptable est à lignes débit/crédit ; l’équilibre, les références, la TVA, la devise et les doublons sont vérifiés côté serveur.
 - Les appels OCR/analyse sont asynchrones et isolés derrière des services fournisseurs remplaçables.
+- L’extraction OCR peut être marquée « vérifiée » pour la traçabilité ; cette action n’est pas une validation comptable et ne crée pas d’écriture.
 - Les interactions IA ne conservent que les éléments nécessaires à la traçabilité ; pas de prompts ou données sensibles complets sans nécessité.
 - L’intégration Sage réelle et le traitement `.mae` restent à préciser après inspection du fichier et de la version de Sage.
 
@@ -43,10 +44,10 @@ Transformer une facture fournisseur en proposition comptable vérifiable et cont
 
 | Phase | Périmètre | État |
 |---|---|---|
-| 1 | Auth, cabinets, sociétés, utilisateurs, rôles, contrôle d’accès et retours UI | Implémentée ; runtime/tests à valider |
-| 2 | Référentiels comptables et données Sage mockées par société | Implémentée avec données fictives ; intégration Sage réelle différée |
-| 3 | Schéma facture/lignes, intake multi-fichier, stockage privé, doublons et visibilité d’état | Intake implémenté ; tests Laravel à exécuter |
-| 4 | Mistral OCR, jobs et états de traitement | À faire — aucun OCR déclenché |
-| 5 | Proposition comptable, contrôles, validation humaine | À faire |
+| 1 | Auth, inscription, cabinets, sociétés, utilisateurs, rôles, catalogue d’activités et contrôle d’accès | Implémentée ; tests Laravel à exécuter |
+| 2 | Référentiels comptables et données d’exemple par société, navigation globale | Implémentée avec données fictives ; intégration Sage réelle différée |
+| 3 | Schéma facture/lignes, intake multi-fichier, stockage privé, doublons, workspace et historique | Implémentée ; tests Laravel à exécuter |
+| 4 | Mistral OCR, jobs, états, revue de l’extraction et cohérence des totaux | Implémentée ; runtime du worker/fournisseur et tests Laravel à valider |
+| 5 | Proposition comptable, contrôles et validation humaine d’écriture | À faire |
 
 Les critères détaillés, champs OCR, diagramme ERD, contrôles et stack sont dans [`docs/requirements.md`](docs/requirements.md). Chaque module conserve son PRD et son README technique sous `docs/modules/`.

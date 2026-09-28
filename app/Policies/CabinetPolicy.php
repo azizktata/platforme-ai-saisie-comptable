@@ -16,4 +16,9 @@ class CabinetPolicy
     {
         return $this->view($user, $cabinet) && $user->isCabinetAdmin();
     }
+
+    public function update(User $user, Cabinet $cabinet): bool
+    {
+        return $this->manageUsers($user, $cabinet);
+    }
 }

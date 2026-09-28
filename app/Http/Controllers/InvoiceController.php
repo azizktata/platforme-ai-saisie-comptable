@@ -2,74 +2,66 @@
 
 namespace App\Http\Controllers;
 
+use App\Exceptions\OcrProviderException;
+use App\Http\Requests\BulkReviewInvoicesRequest;
 use App\Http\Requests\UploadInvoiceFileRequest;
 use App\Jobs\ProcessInvoiceOcr;
 use App\Models\Company;
 use App\Models\Invoice;
 use App\Models\User;
 use App\Services\Invoices\StoreInvoiceUpload;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class InvoiceController extends Controller
 {
-    public function index(Request $request, Company $company): Response
+    public function workspace(Request $request): Response
+    {
+        /** @var User $user */
+        $user = $request->user();
+        $this->authorize('viewAny', Company::class);
+        $companies = $this->accessibleCompanies($user);
+        $requestedCompanyId = $request->query('company_id');
+        $company = null;
+
+        if ($requestedCompanyId !== null && $requestedCompanyId !== '') {
+            abort_unless(is_string($requestedCompanyId) && ctype_digit($requestedCompanyId), 404);
+            $company = $companies->firstWhere('id', (int) $requestedCompanyId);
+            abort_unless($company instanceof Company, 404);
+        }
+
+        return Inertia::render('Invoices/Index', [
+            'mode' => 'workspace',
+            'companies' => $this->companyOptions($companies),
+            'company' => $company ? $this->companySummary($company) : null,
+            'invoices' => $company ? $this->invoicePaginator($company) : null,
+            'canUploadInvoices' => $company !== null && $user->can('manageInvoices', $company),
+            'canReviewInvoices' => $company !== null && $user->can('manageInvoices', $company),
+        ]);
+    }
+
+    public function index(Company $company): Response
     {
         $this->authorize('view', $company);
 
-        $invoices = $company->invoices()
-            ->orderByDesc('created_at')
-            ->orderByDesc('id')
-            ->paginate(20, [
-                'id',
-                'company_id',
-                'original_filename',
-                'size_bytes',
-                'supplier_name',
-                'invoice_number',
-                'invoice_date',
-                'total_amount',
-                'currency',
-                'status',
-                'ocr_attempts',
-                'ocr_error_message',
-                'ocr_warnings',
-                'created_at',
-            ])
-            ->withQueryString()
-            ->through(fn (Invoice $invoice): array => [
-                'id' => $invoice->id,
-                'original_filename' => $invoice->original_filename,
-                'size_bytes' => $invoice->size_bytes,
-                'supplier_name' => $invoice->supplier_name,
-                'invoice_number' => $invoice->invoice_number,
-                'invoice_date' => $invoice->invoice_date?->toDateString(),
-                'total_amount' => $invoice->total_amount,
-                'currency' => $invoice->currency,
-                'status' => $invoice->status,
-                'ocr_attempts' => $invoice->ocr_attempts,
-                'ocr_error_message' => $invoice->ocr_error_message,
-                'ocr_warnings' => $invoice->ocr_warnings ?? [],
-                'created_at' => $invoice->created_at->toIso8601String(),
-                'download_url' => route('companies.invoices.download', [$company, $invoice]),
-            ]);
-
         return Inertia::render('Invoices/Index', [
-            'company' => [
-                'id' => $company->id,
-                'name' => $company->name,
-                'currency' => $company->currency ?? 'TND',
-            ],
-            'invoices' => $invoices,
-            'canUploadInvoices' => $request->user()->can('manageInvoices', $company),
+            'mode' => 'history',
+            'companies' => [],
+            'company' => $this->companySummary($company),
+            'invoices' => $this->invoicePaginator($company),
+            'canUploadInvoices' => false,
+            'canReviewInvoices' => false,
         ]);
     }
 
@@ -139,6 +131,14 @@ class InvoiceController extends Controller
 
         try {
             ProcessInvoiceOcr::dispatch($invoice->id, $company->id);
+        } catch (OcrProviderException $exception) {
+            $invoice->refresh();
+            Log::warning('Invoice OCR failed during synchronous queue execution.', [
+                'invoice_id' => $invoice->id,
+                'company_id' => $company->id,
+                'error_code' => $exception->errorCode,
+                'transport_error' => $exception->diagnostic,
+            ]);
         } catch (\Throwable) {
             $this->markOcrQueueFailure($invoice);
             Log::warning('Invoice OCR job could not be dispatched.', [
@@ -190,6 +190,16 @@ class InvoiceController extends Controller
 
         try {
             ProcessInvoiceOcr::dispatch($invoice->id, $company->id);
+        } catch (OcrProviderException $exception) {
+            $invoice->refresh();
+            Log::warning('Invoice OCR retry failed during synchronous queue execution.', [
+                'invoice_id' => $invoice->id,
+                'company_id' => $company->id,
+                'error_code' => $exception->errorCode,
+                'transport_error' => $exception->diagnostic,
+            ]);
+
+            return back()->withErrors(['ocr' => $invoice->ocr_error_message ?? 'Le service OCR n’est pas joignable. Vérifiez la configuration réseau du serveur.']);
         } catch (\Throwable) {
             $invoice->refresh();
             $this->markOcrQueueFailure($invoice);
@@ -202,7 +212,44 @@ class InvoiceController extends Controller
             return back()->withErrors(['ocr' => 'La relance OCR n’a pas pu être planifiée. Réessayez plus tard.']);
         }
 
-        return to_route('companies.invoices.index', $company);
+        return to_route('invoices.index', ['company_id' => $company->id]);
+    }
+
+    public function bulkReview(BulkReviewInvoicesRequest $request, Company $company): RedirectResponse
+    {
+        $invoiceIds = array_values(array_unique(array_map('intval', $request->validated('invoice_ids'))));
+        /** @var User $reviewer */
+        $reviewer = $request->user();
+        $reviewedAt = now();
+
+        DB::transaction(function () use ($company, $invoiceIds, $reviewer, $reviewedAt): void {
+            $invoices = Invoice::query()
+                ->where('company_id', $company->id)
+                ->whereIn('id', $invoiceIds)
+                ->lockForUpdate()
+                ->get();
+
+            if ($invoices->count() !== count($invoiceIds)) {
+                throw ValidationException::withMessages([
+                    'invoice_ids' => 'Certaines factures ne sont pas accessibles dans cette société.',
+                ]);
+            }
+
+            if ($invoices->contains(fn (Invoice $invoice): bool => $invoice->status !== 'ocr_completed')) {
+                throw ValidationException::withMessages([
+                    'invoice_ids' => 'Seules les extractions OCR terminées peuvent être marquées comme vérifiées.',
+                ]);
+            }
+
+            foreach ($invoices as $invoice) {
+                $invoice->forceFill([
+                    'ocr_reviewed_at' => $reviewedAt,
+                    'ocr_reviewed_by' => $reviewer->id,
+                ])->save();
+            }
+        });
+
+        return to_route('invoices.index', ['company_id' => $company->id]);
     }
 
     public function download(Company $company, Invoice $invoice): StreamedResponse
@@ -221,6 +268,72 @@ class InvoiceController extends Controller
                 'Cache-Control' => 'private, no-store',
             ],
         );
+    }
+
+    private function accessibleCompanies(User $user): Collection
+    {
+        return $user->isCabinetAdmin()
+            ? $user->cabinet->companies()->orderBy('name')->get()
+            : $user->companies()->where('companies.cabinet_id', $user->cabinet_id)->orderBy('name')->get();
+    }
+
+    private function companyOptions(Collection $companies): array
+    {
+        return $companies->map(fn (Company $company): array => [
+            'id' => $company->id,
+            'name' => $company->name,
+        ])->values()->all();
+    }
+
+    private function companySummary(Company $company): array
+    {
+        return [
+            'id' => $company->id,
+            'name' => $company->name,
+            'currency' => $company->currency ?? 'TND',
+        ];
+    }
+
+    private function invoicePaginator(Company $company): LengthAwarePaginator
+    {
+        return $company->invoices()
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->paginate(20, [
+                'id',
+                'company_id',
+                'original_filename',
+                'size_bytes',
+                'supplier_name',
+                'invoice_number',
+                'invoice_date',
+                'total_amount',
+                'currency',
+                'status',
+                'ocr_attempts',
+                'ocr_error_message',
+                'ocr_warnings',
+                'ocr_reviewed_at',
+                'created_at',
+            ])
+            ->withQueryString()
+            ->through(fn (Invoice $invoice): array => [
+                'id' => $invoice->id,
+                'original_filename' => $invoice->original_filename,
+                'size_bytes' => $invoice->size_bytes,
+                'supplier_name' => $invoice->supplier_name,
+                'invoice_number' => $invoice->invoice_number,
+                'invoice_date' => $invoice->invoice_date?->toDateString(),
+                'total_amount' => $invoice->total_amount,
+                'currency' => $invoice->currency,
+                'status' => $invoice->status,
+                'ocr_attempts' => $invoice->ocr_attempts,
+                'ocr_error_message' => $invoice->ocr_error_message,
+                'ocr_warnings' => $invoice->ocr_warnings ?? [],
+                'ocr_reviewed_at' => $invoice->ocr_reviewed_at?->toIso8601String(),
+                'created_at' => $invoice->created_at->toIso8601String(),
+                'download_url' => route('companies.invoices.download', [$company, $invoice]),
+            ]);
     }
 
     private function markOcrQueueFailure(Invoice $invoice): void

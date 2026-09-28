@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Company;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -11,12 +12,17 @@ class DashboardController extends Controller
 {
     public function __invoke(Request $request): Response
     {
+        /** @var User $user */
         $user = $request->user();
         $this->authorize('viewAny', Company::class);
 
         $companies = $user->isCabinetAdmin()
             ? $user->cabinet->companies()->withCount('users')->orderBy('name')->get()
-            : $user->companies()->withCount('users')->orderBy('name')->get();
+            : $user->companies()
+                ->where('companies.cabinet_id', $user->cabinet_id)
+                ->withCount('users')
+                ->orderBy('name')
+                ->get();
 
         return Inertia::render('Dashboard', [
             'cabinet' => [

@@ -76,6 +76,7 @@ type Paginated<T> = {
 };
 
 type Props = {
+  companies: { id: number; name: string }[];
   company: Company;
   chartAccounts: Paginated<ChartAccount>;
   analyticalAccounts: Paginated<AnalyticalAccount>;
@@ -102,6 +103,7 @@ const partyTypeLabels: Record<string, string> = {
 };
 
 export default function AccountingDataShow({
+  companies,
   company,
   chartAccounts,
   analyticalAccounts,
@@ -134,7 +136,6 @@ export default function AccountingDataShow({
   return (
     <AppShell
       activeSection="accounting"
-      companyId={company.id}
       cabinetName={auth?.cabinet?.name}
       canManageCabinet={auth?.canManageCabinet}
       user={auth?.user}
@@ -155,17 +156,30 @@ export default function AccountingDataShow({
               Référentiels et extraits historiques propres à cette société, préparés pour le contexte comptable des prochaines phases.
             </p>
           </div>
-          {canLoadDemoData && (
-            <button
-              type="button"
-              onClick={loadDemoData}
-              disabled={demoForm.processing}
-              className="inline-flex items-center gap-2 rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {demoForm.processing ? <LoaderCircle className="animate-spin" size={17} /> : <BookOpenText size={17} />}
-              {demoForm.processing ? 'Chargement…' : 'Charger les données d’exemple'}
-            </button>
-          )}
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="block min-w-56 text-sm font-medium text-slate-700">
+              Société consultée
+              <select
+                className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100"
+                value={company.id}
+                disabled={demoForm.processing}
+                onChange={(event) => router.get('/accounting-data', { company_id: Number(event.target.value) }, { preserveScroll: true, replace: true })}
+              >
+                {companies.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </label>
+            {canLoadDemoData && (
+              <button
+                type="button"
+                onClick={loadDemoData}
+                disabled={demoForm.processing}
+                className="inline-flex items-center gap-2 rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {demoForm.processing ? <LoaderCircle className="animate-spin" size={17} /> : <BookOpenText size={17} />}
+                {demoForm.processing ? 'Chargement…' : 'Charger les données d’exemple'}
+              </button>
+            )}
+          </div>
         </header>
 
         <div className="flex gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-sky-950">

@@ -92,11 +92,12 @@ class MistralOcrProvider implements OcrProvider
                     'include_blocks' => false,
                     'table_format' => 'markdown',
                 ]);
-        } catch (ConnectionException) {
+        } catch (ConnectionException $exception) {
             throw new OcrProviderException(
                 'provider_unreachable',
                 true,
                 'Le service OCR est temporairement injoignable.',
+                diagnostic: $this->safeTransportDiagnostic($exception->getMessage()),
             );
         }
 
@@ -165,6 +166,14 @@ class MistralOcrProvider implements OcrProvider
             model: $providerResponse['model'],
             usage: is_array($providerResponse['usage_info'] ?? null) ? $providerResponse['usage_info'] : [],
         );
+    }
+
+    private function safeTransportDiagnostic(string $message): string
+    {
+        $message = preg_replace('/Bearer\\s+\\S+/i', 'Bearer [redacted]', $message) ?? $message;
+        $message = preg_replace('/https?:\\/\\/[^\\s]+/i', '[provider URL]', $message) ?? $message;
+
+        return mb_substr(trim(strip_tags($message)), 0, 300);
     }
 
     private function documentChunk(string $mimeType, string $contents): array

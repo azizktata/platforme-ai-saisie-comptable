@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Requests\StoreCompanyRequest;
 use App\Http\Requests\UpdateCompanyRequest;
 use App\Models\Company;
+use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -15,11 +16,16 @@ class CompanyController extends Controller
     public function index(Request $request): Response
     {
         $this->authorize('viewAny', Company::class);
+        /** @var User $user */
         $user = $request->user();
 
         $companies = $user->isCabinetAdmin()
             ? $user->cabinet->companies()->withCount('users')->orderBy('name')->get()
-            : $user->companies()->withCount('users')->orderBy('name')->get();
+            : $user->companies()
+                ->where('companies.cabinet_id', $user->cabinet_id)
+                ->withCount('users')
+                ->orderBy('name')
+                ->get();
 
         return Inertia::render('Companies/Index', [
             'companies' => $companies->map(fn (Company $company): array => [
@@ -35,6 +41,8 @@ class CompanyController extends Controller
                 'access_role' => $user->companyRole($company),
             ])->values(),
             'canCreateCompany' => $user->can('create', Company::class),
+            'canManageActivities' => $user->isCabinetAdmin(),
+            'activities' => $this->activityOptions($user),
         ]);
     }
 
@@ -50,5 +58,26 @@ class CompanyController extends Controller
         $company->update($request->validated());
 
         return to_route('companies.index');
+    }
+
+    private function activityOptions(User $user): array
+    {
+        $options = [];
+        $seen = [];
+        $activities = [
+            ...config('company_activities', []),
+            ...$user->cabinet->activities()->orderBy('name')->pluck('name')->all(),
+        ];
+
+        foreach ($activities as $activity) {
+            $key = mb_strtolower($activity);
+
+            if (! isset($seen[$key])) {
+                $options[] = $activity;
+                $seen[$key] = true;
+            }
+        }
+
+        return $options;
     }
 }

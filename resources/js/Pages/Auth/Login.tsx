@@ -1,4 +1,4 @@
-import { Head, useForm } from '@inertiajs/react';
+import { Head, Link, useForm } from '@inertiajs/react';
 import { ArrowRight, Building2, Check, Eye, EyeOff, LockKeyhole } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
@@ -90,6 +90,7 @@ export default function Login() {
             </button>
           </form>
           <div className="login-security"><LockKeyhole size={13} /><span>Connexion sécurisée à votre espace personnel.</span></div>
+          <p className="mt-5 text-center text-sm text-slate-600">Nouveau sur ComptaFlow ? <Link href="/register" className="font-semibold text-teal-700 hover:text-teal-900">Créer un cabinet</Link></p>
         </div>
         <div className="login-main-footer">Besoin d’aide ? Contactez votre administrateur.</div>
       </main>
