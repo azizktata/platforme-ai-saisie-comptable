@@ -4,4 +4,5 @@
 - La migration ajoute un index unique `(cabinet_id, name)` et des champs profil/Sage externes sans imposer de format propriétaire.
 - `CompanyController@index` choisit une requête cabinet pour les admins et une relation pivot pour les membres.
 - `StoreCompanyRequest` / `UpdateCompanyRequest` autorisent uniquement l’admin, normalisent les codes ISO et valident l’unicité par cabinet.
-- La page Inertia `Companies/Index.tsx` expose la liste et la création ; `CompanyProfileCard` permet l’édition du profil. La suppression n’est pas exposée.
+- La page Inertia `Companies/Index.tsx` expose la liste et la création ; `CompanyProfileCard` permet l’édition du profil et ouvre `companies.accounting-data`. La suppression n’est pas exposée.
+- Les retours des créations et modifications utilisent Sonner (`onSuccess`/`onError`) afin de donner un feedback pour chaque action.

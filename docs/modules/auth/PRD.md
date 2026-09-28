@@ -9,6 +9,7 @@ Protéger l’accès à la plateforme multi-cabinet et garantir qu’un compte a
 - Connexion par e-mail et mot de passe via session Laravel ; les e-mails sont normalisés en minuscules.
 - Routes métier réservées aux utilisateurs authentifiés ; l’identifiant de session est renouvelé à la connexion et invalidé à la déconnexion.
 - Les tentatives de connexion sont limitées.
+- La connexion/déconnexion affiche un retour de succès ou d’échec sous forme de toast ; les exceptions réseau et réponses Inertia invalides ont aussi un retour global.
 - Chaque compte appartient à un cabinet (`users.cabinet_id`). Les rôles cabinet et société sont contrôlés séparément.
 - Les comptes sont provisionnés par un administrateur de cabinet ou par commande sécurisée ; aucune inscription publique n’est prévue dans le périmètre de Phase 1.
 - Les rôles d’accès société sont `invoice_manager` et `company_user`; `cabinet_admin` gère le cabinet.

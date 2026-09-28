@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AccountingDataController;
 use App\Http\Controllers\AuthenticatedSessionController;
 use App\Http\Controllers\CabinetUserController;
 use App\Http\Controllers\CompanyController;
@@ -20,6 +21,10 @@ Route::middleware('auth')->group(function (): void {
     Route::get('/companies', [CompanyController::class, 'index'])->name('companies.index');
     Route::post('/companies', [CompanyController::class, 'store'])->name('companies.store');
     Route::put('/companies/{company}', [CompanyController::class, 'update'])->name('companies.update');
+    Route::get('/companies/{company}/accounting-data', [AccountingDataController::class, 'show'])
+        ->name('companies.accounting-data');
+    Route::post('/companies/{company}/accounting-data/demo', [AccountingDataController::class, 'seedDemo'])
+        ->name('companies.accounting-data.demo');
     Route::get('/cabinet/users', [CabinetUserController::class, 'index'])->name('cabinet.users.index');
     Route::post('/cabinet/users', [CabinetUserController::class, 'store'])->name('cabinet.users.store');
     Route::put('/cabinet/users/{user}', [CabinetUserController::class, 'update'])->name('cabinet.users.update');

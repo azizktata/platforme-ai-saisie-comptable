@@ -27,4 +27,13 @@ class CompanyPolicy
         return $user->isCabinetAdmin() && $user->cabinet_id === $company->cabinet_id;
     }
 
+    public function manageAccountingData(User $user, Company $company): bool
+    {
+        if (! $user->hasCompanyAccess($company)) {
+            return false;
+        }
+
+        return $user->isCabinetAdmin()
+            || $user->companyRole($company) === User::COMPANY_ROLE_INVOICE_MANAGER;
+    }
 }

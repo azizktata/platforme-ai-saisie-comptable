@@ -4,7 +4,7 @@
 
 Le cahier des charges et le prompt d’implémentation fournis par le client sont désormais consignés dans [`docs/requirements.md`](docs/requirements.md) et pilotent les décisions du produit. Ils remplacent le périmètre provisoire de saisie manuelle livré dans le premier commit.
 
-**État actuel : Phase 1 — fondation multi-cabinet implémentée.** Authentification, cabinets, sociétés, rôles, affectations société et écrans de gestion sont présents. L’exécution des migrations/tests Laravel reste à valider dans un environnement avec PHP 8.3, Composer et MySQL. Les phases 2 à 5 ne sont pas présentées comme livrées : données Sage, factures, jobs OCR Mistral, analyse Mistral Small et écritures en partie double restent à construire dans cet ordre.
+**État actuel : Phases 1 et 2 implémentées.** La fondation multi-cabinet, les rôles/affectations, les retours toast et les référentiels comptables par société sont présents. La Phase 2 fournit des modèles, migrations, un jeu Sage-like idempotent pour le développement/tests et une page de consultation ; aucune base Sage ni fichier `.mae` réel n’a été fourni. Les migrations et tests Laravel restent à exécuter dans un environnement avec PHP 8.3 et Composer. Les Phases 3 à 5 (factures, jobs OCR Mistral, analyse Mistral Small et validation humaine) ne sont pas implémentées.
 
 ## Vision
 
@@ -43,8 +43,8 @@ Transformer une facture fournisseur en proposition comptable vérifiable et cont
 
 | Phase | Périmètre | État |
 |---|---|---|
-| 1 | Auth, cabinets, sociétés, utilisateurs, rôles, contrôle d’accès | Implémentée ; runtime/tests à valider |
-| 2 | Référentiels comptables et données Sage mockées | À faire |
+| 1 | Auth, cabinets, sociétés, utilisateurs, rôles, contrôle d’accès et retours UI | Implémentée ; runtime/tests à valider |
+| 2 | Référentiels comptables et données Sage mockées par société | Implémentée avec données fictives ; intégration Sage réelle différée |
 | 3 | Factures, lignes et import multiple | À faire |
 | 4 | Mistral OCR, jobs et états de traitement | À faire |
 | 5 | Proposition comptable, contrôles, validation humaine | À faire |

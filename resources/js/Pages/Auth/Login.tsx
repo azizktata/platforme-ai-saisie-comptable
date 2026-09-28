@@ -1,20 +1,23 @@
 import { Head, useForm } from '@inertiajs/react';
 import { ArrowRight, Building2, Check, Eye, EyeOff, LockKeyhole } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
+import { toast } from 'sonner';
 
 type LoginFields = {
   email: string;
   password: string;
   remember: boolean;
 };
-
 export default function Login() {
   const form = useForm<LoginFields>({ email: '', password: '', remember: false });
   const [showPassword, setShowPassword] = useState(false);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    form.post('/login');
+    form.post('/login', {
+      onSuccess: () => toast.success('Connexion réussie.'),
+      onError: () => toast.error('Connexion impossible. Vérifiez vos identifiants et réessayez.'),
+    });
   };
 
   return (

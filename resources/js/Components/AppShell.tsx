@@ -3,7 +3,7 @@ import { Building2, FileCheck2, LayoutDashboard, LogOut, Menu, Users, X } from '
 import { useState, type ReactNode } from 'react';
 import type { AuthUser } from '../types';
 
-type Section = 'overview' | 'companies' | 'users';
+type Section = 'overview' | 'companies' | 'accounting' | 'users';
 type NavigationItem = {
   label: string;
   href: string;
@@ -15,7 +15,6 @@ type Props = {
   children: ReactNode;
   onNavigate?: (href: string) => void;
   onLogout?: () => void;
-  successMessage?: string | null;
   user?: AuthUser | null;
   cabinetName?: string | null;
   canManageCabinet?: boolean;
@@ -36,7 +35,6 @@ export default function AppShell({
   children,
   onNavigate,
   onLogout,
-  successMessage,
   user,
   cabinetName,
   canManageCabinet = false,
@@ -48,12 +46,14 @@ export default function AppShell({
   const sectionLabels: Record<Section, string> = {
     overview: 'Vue d’ensemble',
     companies: 'Sociétés',
+    accounting: 'Données comptables',
     users: 'Utilisateurs',
   };
 
   const renderLink = (item: NavigationItem) => {
     const Icon = item.icon;
-    const className = `sidebar-link ${activeSection === item.section ? 'sidebar-link--active' : ''}`;
+    const isActive = activeSection === item.section || (activeSection === 'accounting' && item.section === 'companies');
+    const className = `sidebar-link ${isActive ? 'sidebar-link--active' : ''}`;
     const handleClick = () => setMobileOpen(false);
     const content = (
       <>
@@ -149,15 +149,7 @@ export default function AppShell({
           </div>
         </header>
 
-        <main className="page-content">
-          {successMessage && (
-            <div className="flash-message" role="status">
-              <span className="flash-message__dot" />
-              {successMessage}
-            </div>
-          )}
-          {children}
-        </main>
+        <main className="page-content">{children}</main>
       </div>
     </div>
   );

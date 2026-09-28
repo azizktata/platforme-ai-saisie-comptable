@@ -1,6 +1,7 @@
-import { useForm } from '@inertiajs/react';
-import { Building2, PencilLine, Users } from 'lucide-react';
+import { Link, useForm } from '@inertiajs/react';
+import { BookOpenText, Building2, PencilLine, Users } from 'lucide-react';
 import type { FormEvent, ReactNode } from 'react';
+import { toast } from 'sonner';
 import type { CompanySummary } from '../types';
 
 type Props = {
@@ -32,7 +33,11 @@ export default function CompanyProfileCard({ company, canEdit }: Props) {
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    form.put(`/companies/${company.id}`, { preserveScroll: true });
+    form.put(`/companies/${company.id}`, {
+      preserveScroll: true,
+      onSuccess: () => toast.success('Profil de la société mis à jour.'),
+      onError: () => toast.error('Le profil n’a pas pu être enregistré. Vérifiez les champs indiqués.'),
+    });
   };
 
   return (
@@ -48,6 +53,13 @@ export default function CompanyProfileCard({ company, canEdit }: Props) {
         <div className="flex justify-between gap-3"><dt className="text-slate-500">Activité</dt><dd className="text-right font-medium text-slate-700">{company.activity || '—'}</dd></div>
         <div className="flex justify-between gap-3"><dt className="text-slate-500">Devise</dt><dd className="text-right font-medium text-slate-700">{company.currency || 'À configurer'}</dd></div>
       </dl>
+
+      <Link
+        href={`/companies/${company.id}/accounting-data`}
+        className="mt-4 inline-flex items-center gap-2 rounded-lg bg-teal-50 px-3 py-2 text-sm font-semibold text-teal-800 transition hover:bg-teal-100"
+      >
+        <BookOpenText size={16} /> Données comptables
+      </Link>
 
       {canEdit && (
         <details className="group mt-4 border-t border-slate-100 pt-3">

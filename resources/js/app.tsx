@@ -1,6 +1,8 @@
 import { createInertiaApp } from '@inertiajs/react';
 import { createRoot } from 'react-dom/client';
 import type { ComponentType } from 'react';
+import RequestToastEvents from './Components/RequestToastEvents';
+import ToastHost from './Components/ToastHost';
 import '../css/app.css';
 
 type PageModule = { default: ComponentType<Record<string, unknown>> };
@@ -18,7 +20,13 @@ createInertiaApp({
     return loadPage();
   },
   setup({ el, App, props }) {
-    createRoot(el).render(<App {...props} />);
+    createRoot(el).render(
+      <>
+        <App {...props} />
+        <RequestToastEvents />
+        <ToastHost />
+      </>,
+    );
   },
   progress: {
     color: '#187f70',

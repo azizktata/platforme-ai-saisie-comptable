@@ -4,9 +4,11 @@ Application de traitement comptable des factures fournisseurs, destinée aux cab
 
 ## État d’implémentation
 
-La **Phase 1 (fondation)** est implémentée : authentification, cabinets, sociétés, utilisateurs, rôles et affectations d’accès. Elle comprend un tableau de bord par cabinet, la création/modification des sociétés et la création/modification des comptes et accès. L’exécution du backend doit encore être validée localement avec la stack PHP/MySQL.
+Les **Phases 1 et 2** sont implémentées : fondation multi-cabinet, authentification, rôles/affectations société, retours toast sur les actions, plan comptable, comptes analytiques, tiers, journaux et écritures historiques par société. La page « Données comptables » est consultable depuis le tableau de bord ou la liste des sociétés. Les migrations et tests Laravel doivent encore être exécutés localement avec PHP/Composer.
 
-Les Phases 2 à 5 restent à implémenter : référentiels comptables mockés/importés, factures et lignes, OCR asynchrone Mistral, analyse Mistral Small, proposition en partie double et validation humaine. La présence d’une variable `MISTRAL_API_KEY` dans `.env.example` ne signifie pas qu’un appel IA est actuellement effectué. Le connecteur et l’export Sage réel attendent l’inspection du fichier `.mae` et la confirmation de la version Sage.
+La Phase 2 utilise un jeu de démonstration déterministe de type Sage (12 comptes généraux, 3 comptes analytiques, 3 tiers, 4 journaux et 2 écritures équilibrées par société). Les codes sont stockés en texte, et les montants utilisent trois décimales pour les millimes tunisiens. Aucune base Sage ni aucun fichier `.mae` réel n’a été fourni : la synchronisation/import réel reste différé.
+
+Les Phases 3 à 5 restent à implémenter : factures et lignes, OCR asynchrone Mistral, analyse Mistral Small, proposition en partie double et validation humaine. La présence d’une variable `MISTRAL_API_KEY` dans `.env.example` ne signifie pas qu’un appel IA est actuellement effectué. Le connecteur et l’export Sage réel attendent l’inspection du fichier `.mae` et la confirmation de la version Sage.
 
 ## Stack
 
@@ -33,7 +35,7 @@ php artisan key:generate
 php artisan migrate --seed
 ```
 
-Le seeder crée un cabinet d’exemple, trois sociétés fictives et un administrateur en environnement `local` ou `testing` uniquement. Valeurs locales par défaut : `demo@example.test` / `password`. Changez-les avant d’exposer un environnement ; ne réutilisez jamais ces identifiants en production.
+Le seeder crée un cabinet d’exemple, trois sociétés fictives, un administrateur et leurs référentiels/écritures comptables de démonstration en environnement `local` ou `testing` uniquement. Une nouvelle société peut charger le même jeu depuis « Données comptables » en environnement local/test, avec un rôle administrateur de cabinet ou gestionnaire de factures. Cette action est masquée et refusée hors de ces environnements. Valeurs locales par défaut : `demo@example.test` / `password`. Changez-les avant d’exposer un environnement ; ne réutilisez jamais ces identifiants en production.
 
 Lancez Vite et Laravel dans deux terminaux :
 
@@ -46,7 +48,11 @@ Ouvrez l’URL affichée par Artisan. L’administrateur peut créer des sociét
 
 #### Dépannage Vite (`ERR_ADDRESS_INVALID`)
 
-Vite écoute sur `0.0.0.0` afin d’accepter les connexions, mais le navigateur doit charger les assets depuis une adresse routable. `VITE_DEV_SERVER_ORIGIN` vaut `http://127.0.0.1:5173` par défaut. Ne le définissez pas à `http://0.0.0.0:5173`. Après changement de cette valeur, arrêtez Vite ; si `public/hot` subsiste alors que Vite est arrêté, supprimez ce fichier puis relancez `npm run dev`.
+Le serveur Vite de l’application écoute sur `127.0.0.1:5173` en port strict. `VITE_DEV_SERVER_ORIGIN` configure l’origine des assets et vaut `http://127.0.0.1:5173` par défaut ; cette valeur doit être joignable par le navigateur (ne définissez pas l’origine à `http://0.0.0.0:5173`). Après changement, arrêtez Vite ; si `public/hot` subsiste alors que Vite est arrêté, supprimez ce fichier puis relancez `npm run dev`. L’aperçu `preview:ui` est un serveur séparé et écoute sur `0.0.0.0`.
+
+## Retours d’action
+
+Les succès des mutations (connexion/déconnexion, sociétés, profils et accès utilisateurs) affichent un toast Sonner ; les erreurs de validation et les réponses réseau/serveur inattendues affichent un toast d’erreur. La liste des utilisateurs masque entièrement la section « Accès société » lorsque le rôle choisi est `cabinet_admin`.
 
 ### Aperçu UI sans PHP/MySQL
 
@@ -68,15 +74,16 @@ Les tests Laravel configurent SQLite en mémoire. Pour les phases futures, les t
 ## Structure utile
 
 ```text
-app/Models/                 Cabinet, Company, User
-app/Policies/               Autorisations d’accès aux sociétés
-app/Http/Controllers/       Auth, tableau de bord, gestion cabinet/sociétés
+app/Models/                 Cabinet, User, Company et référentiels/écritures
+app/Policies/               Autorisations d’accès aux sociétés et données comptables
+app/Services/AccountingData/ Service idempotent des données comptables d’exemple
+app/Http/Controllers/       Auth, tableau de bord, gestion et consultation comptable
 app/Http/Requests/          Validation serveur
-resources/js/Pages/         Pages Inertia React
-resources/js/Components/    Coquille et composants partagés
+resources/js/Pages/         Pages Inertia React, dont AccountingData/Show
+resources/js/Components/    Coquille, toasts et composants partagés
 resources/css/app.css       Tailwind et styles applicatifs
-database/migrations/        Schéma et migrations de compatibilité
-database/seeders/           Cabinet local fictif
+database/migrations/        Schéma, Phase 2 et migrations de compatibilité
+database/seeders/           Cabinet et référentiels fictifs local/test
 docs/requirements.md        Cahier des charges fourni
 docs/modules/               PRD/README techniques par module
 ```

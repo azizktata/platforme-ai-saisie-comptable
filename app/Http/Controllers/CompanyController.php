@@ -42,13 +42,13 @@ class CompanyController extends Controller
     {
         $request->user()->cabinet->companies()->create($request->validated());
 
-        return to_route('companies.index')->with('success', 'Société ajoutée au cabinet.');
+        return to_route('companies.index');
     }
 
     public function update(UpdateCompanyRequest $request, Company $company): RedirectResponse
     {
         $company->update($request->validated());
 
-        return to_route('companies.index')->with('success', 'Profil de la société mis à jour.');
+        return to_route('companies.index');
     }
 }

@@ -1,15 +1,15 @@
 import { router, useForm } from '@inertiajs/react';
 import type { FormEvent, ReactNode } from 'react';
 import { Building2, Plus } from 'lucide-react';
+import { toast } from 'sonner';
 import AppShell from '../../Components/AppShell';
 import CompanyProfileCard from '../../Components/CompanyProfileCard';
-import type { CompanySummary, FlashProps, SharedAuthProps } from '../../types';
+import type { CompanySummary, SharedAuthProps } from '../../types';
 
 type Props = {
   companies: CompanySummary[];
   canCreateCompany: boolean;
   auth?: SharedAuthProps;
-  flash?: FlashProps;
 };
 
 type CompanyForm = {
@@ -24,7 +24,7 @@ type CompanyForm = {
 
 const inputClass = 'mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-teal-600 focus:ring-2 focus:ring-teal-100';
 
-export default function CompaniesIndex({ companies, canCreateCompany, auth, flash }: Props) {
+export default function CompaniesIndex({ companies, canCreateCompany, auth }: Props) {
   const form = useForm<CompanyForm>({
     name: '',
     legal_name: '',
@@ -37,7 +37,14 @@ export default function CompaniesIndex({ companies, canCreateCompany, auth, flas
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    form.post('/companies', { preserveScroll: true, onSuccess: () => form.reset() });
+    form.post('/companies', {
+      preserveScroll: true,
+      onSuccess: () => {
+        form.reset();
+        toast.success('Société ajoutée au cabinet.');
+      },
+      onError: () => toast.error('La société n’a pas pu être créée. Vérifiez les champs indiqués.'),
+    });
   };
 
   return (
@@ -46,8 +53,10 @@ export default function CompaniesIndex({ companies, canCreateCompany, auth, flas
       cabinetName={auth?.cabinet?.name}
       canManageCabinet={auth?.canManageCabinet}
       user={auth?.user}
-      successMessage={flash?.success}
-      onLogout={auth?.user ? () => router.post('/logout') : undefined}
+      onLogout={auth?.user ? () => router.post('/logout', {}, {
+        onSuccess: () => toast.success('Déconnexion réussie.'),
+        onError: () => toast.error('La déconnexion a échoué. Réessayez.'),
+      }) : undefined}
     >
       <section className="mx-auto max-w-7xl space-y-6">
         <header>

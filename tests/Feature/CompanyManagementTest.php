@@ -163,6 +163,31 @@ class CompanyManagementTest extends TestCase
         ]);
     }
 
+    public function test_promoting_a_member_to_cabinet_admin_clears_company_assignments(): void
+    {
+        $cabinet = Cabinet::factory()->create();
+        $admin = User::factory()->cabinetAdmin()->create(['cabinet_id' => $cabinet->id]);
+        $member = User::factory()->create(['cabinet_id' => $cabinet->id]);
+        $company = Company::factory()->create(['cabinet_id' => $cabinet->id]);
+        $member->companies()->attach($company, ['role' => User::COMPANY_ROLE_INVOICE_MANAGER]);
+
+        $this->actingAs($admin)->put("/cabinet/users/{$member->id}", [
+            'name' => $member->name,
+            'email' => $member->email,
+            'password' => '',
+            'cabinet_role' => User::CABINET_ROLE_ADMIN,
+            'company_access' => [
+                ['company_id' => $company->id, 'role' => User::COMPANY_ROLE_INVOICE_MANAGER],
+            ],
+        ])->assertRedirect('/cabinet/users');
+
+        $this->assertSame(User::CABINET_ROLE_ADMIN, $member->fresh()->cabinet_role);
+        $this->assertDatabaseMissing('company_user_access', [
+            'user_id' => $member->id,
+            'company_id' => $company->id,
+        ]);
+    }
+
     public function test_administrator_cannot_edit_a_user_in_another_cabinet(): void
     {
         $admin = User::factory()->cabinetAdmin()->create();

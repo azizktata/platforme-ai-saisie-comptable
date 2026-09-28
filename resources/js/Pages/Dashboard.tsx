@@ -1,15 +1,15 @@
 import { router } from '@inertiajs/react';
 import { ArrowRight, Building2, CircleCheck, ShieldCheck, Users } from 'lucide-react';
+import { toast } from 'sonner';
 import AppShell from '../Components/AppShell';
 import type { ReactNode } from 'react';
-import type { CabinetSummary, CompanySummary, FlashProps, SharedAuthProps } from '../types';
+import type { CabinetSummary, CompanySummary, SharedAuthProps } from '../types';
 
 type Props = {
   cabinet: CabinetSummary;
   companies: CompanySummary[];
   canManageCabinet: boolean;
   auth?: SharedAuthProps;
-  flash?: FlashProps;
 };
 
 const roleLabels: Record<string, string> = {
@@ -18,15 +18,17 @@ const roleLabels: Record<string, string> = {
   company_user: 'Consultation et revue',
 };
 
-export default function Dashboard({ cabinet, companies, canManageCabinet, auth, flash }: Props) {
+export default function Dashboard({ cabinet, companies, canManageCabinet, auth }: Props) {
   return (
     <AppShell
       activeSection="overview"
       cabinetName={cabinet.name}
       canManageCabinet={canManageCabinet}
       user={auth?.user}
-      successMessage={flash?.success}
-      onLogout={auth?.user ? () => router.post('/logout') : undefined}
+      onLogout={auth?.user ? () => router.post('/logout', {}, {
+        onSuccess: () => toast.success('Déconnexion réussie.'),
+        onError: () => toast.error('La déconnexion a échoué. Réessayez.'),
+      }) : undefined}
     >
       <section className="mx-auto max-w-7xl space-y-8">
         <div className="flex flex-wrap items-end justify-between gap-4">
@@ -85,6 +87,13 @@ export default function Dashboard({ cabinet, companies, canManageCabinet, auth, 
                     <span>{company.tax_identifier || 'Matricule fiscal à renseigner'}</span>
                     <span className="inline-flex items-center gap-1"><Users size={13} /> {company.users_count} membre{company.users_count > 1 ? 's' : ''}</span>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => router.visit(`/companies/${company.id}/accounting-data`)}
+                    className="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-teal-700 hover:text-teal-900"
+                  >
+                    Données comptables <ArrowRight size={15} />
+                  </button>
                 </article>
               ))}
             </div>
