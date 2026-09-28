@@ -1,9 +1,9 @@
 import { Link } from '@inertiajs/react';
-import { Building2, FileCheck2, LayoutDashboard, LogOut, Menu, Users, X } from 'lucide-react';
+import { BookOpenText, Building2, FileCheck2, FileText, LayoutDashboard, LogOut, Menu, Users, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import type { AuthUser } from '../types';
 
-type Section = 'overview' | 'companies' | 'accounting' | 'users';
+type Section = 'overview' | 'companies' | 'accounting' | 'invoices' | 'users';
 type NavigationItem = {
   label: string;
   href: string;
@@ -18,6 +18,7 @@ type Props = {
   user?: AuthUser | null;
   cabinetName?: string | null;
   canManageCabinet?: boolean;
+  companyId?: number;
 };
 
 const baseNavigation: NavigationItem[] = [
@@ -38,21 +39,30 @@ export default function AppShell({
   user,
   cabinetName,
   canManageCabinet = false,
+  companyId,
 }: Props) {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const navigation = canManageCabinet
-    ? [...baseNavigation, { label: 'Utilisateurs', href: '/cabinet/users', section: 'users' as const, icon: Users }]
-    : baseNavigation;
+  const companyNavigation: NavigationItem[] = companyId === undefined ? [] : [
+    { label: 'Factures', href: `/companies/${companyId}/invoices`, section: 'invoices', icon: FileText },
+    { label: 'Données comptables', href: `/companies/${companyId}/accounting-data`, section: 'accounting', icon: BookOpenText },
+  ];
+  const navigation: NavigationItem[] = [
+    ...baseNavigation,
+    ...companyNavigation,
+    ...(canManageCabinet ? [{ label: 'Utilisateurs', href: '/cabinet/users', section: 'users' as const, icon: Users }] : []),
+  ];
   const sectionLabels: Record<Section, string> = {
     overview: 'Vue d’ensemble',
     companies: 'Sociétés',
     accounting: 'Données comptables',
+    invoices: 'Factures',
     users: 'Utilisateurs',
   };
 
   const renderLink = (item: NavigationItem) => {
     const Icon = item.icon;
-    const isActive = activeSection === item.section || (activeSection === 'accounting' && item.section === 'companies');
+    const isActive = activeSection === item.section
+      || (!companyId && (activeSection === 'accounting' || activeSection === 'invoices') && item.section === 'companies');
     const className = `sidebar-link ${isActive ? 'sidebar-link--active' : ''}`;
     const handleClick = () => setMobileOpen(false);
     const content = (

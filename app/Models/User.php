@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
@@ -53,6 +54,11 @@ class User extends Authenticatable
         return $this->belongsToMany(Company::class, 'company_user_access')
             ->withPivot('role')
             ->withTimestamps();
+    }
+
+    public function uploadedInvoices(): HasMany
+    {
+        return $this->hasMany(Invoice::class, 'uploaded_by');
     }
 
     public function isCabinetAdmin(): bool

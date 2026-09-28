@@ -4,11 +4,11 @@ Application de traitement comptable des factures fournisseurs, destinée aux cab
 
 ## État d’implémentation
 
-Les **Phases 1 et 2** sont implémentées : fondation multi-cabinet, authentification, rôles/affectations société, retours toast sur les actions, plan comptable, comptes analytiques, tiers, journaux et écritures historiques par société. La page « Données comptables » est consultable depuis le tableau de bord ou la liste des sociétés. Les migrations et tests Laravel doivent encore être exécutés localement avec PHP/Composer.
+Les **Phases 1 et 2** sont implémentées : fondation multi-cabinet, authentification, rôles/affectations société, retours toast et données comptables scoppées par société. L’intake de la **Phase 3** est également en place : schéma factures/lignes, import PDF/JPG/JPEG/PNG traité séparément par fichier, fichiers stockés en privé, doublons détectés par SHA-256 avec confirmation, statuts visibles et routes de téléchargement autorisées par société. Les migrations et tests Laravel doivent encore être exécutés localement avec PHP/Composer.
 
 La Phase 2 utilise un jeu de démonstration déterministe de type Sage (12 comptes généraux, 3 comptes analytiques, 3 tiers, 4 journaux et 2 écritures équilibrées par société). Les codes sont stockés en texte, et les montants utilisent trois décimales pour les millimes tunisiens. Aucune base Sage ni aucun fichier `.mae` réel n’a été fourni : la synchronisation/import réel reste différé.
 
-Les Phases 3 à 5 restent à implémenter : factures et lignes, OCR asynchrone Mistral, analyse Mistral Small, proposition en partie double et validation humaine. La présence d’une variable `MISTRAL_API_KEY` dans `.env.example` ne signifie pas qu’un appel IA est actuellement effectué. Le connecteur et l’export Sage réel attendent l’inspection du fichier `.mae` et la confirmation de la version Sage.
+L’OCR asynchrone Mistral (Phase 4), l’analyse Mistral Small, la proposition en partie double et la validation humaine (Phase 5) restent à implémenter ; l’import ne déclenche pour l’instant aucun traitement IA et les champs extraits restent vides. La présence d’une variable `MISTRAL_API_KEY` dans `.env.example` ne signifie pas qu’un appel IA est effectué. Le connecteur et l’export Sage réel attendent l’inspection du fichier `.mae` et la confirmation de la version Sage.
 
 ## Stack
 
@@ -52,7 +52,13 @@ Le serveur Vite de l’application écoute sur `127.0.0.1:5173` en port strict. 
 
 ## Retours d’action
 
-Les succès des mutations (connexion/déconnexion, sociétés, profils et accès utilisateurs) affichent un toast Sonner ; les erreurs de validation et les réponses réseau/serveur inattendues affichent un toast d’erreur. La liste des utilisateurs masque entièrement la section « Accès société » lorsque le rôle choisi est `cabinet_admin`.
+Les succès des mutations (connexion/déconnexion, sociétés, profils et accès utilisateurs) affichent un toast Sonner ; les erreurs de validation et les réponses réseau/serveur inattendues affichent un toast d’erreur. L’import de factures confirme les réussites et signale les fichiers refusés individuellement sans annuler les autres. La liste des utilisateurs masque entièrement la section « Accès société » lorsque le rôle choisi est `cabinet_admin`.
+
+## Intake de factures (Phase 3)
+
+Depuis « Factures » sur une société, un administrateur de cabinet ou gestionnaire autorisé peut sélectionner jusqu’à 300 fichiers. Chaque PDF/JPG/JPEG/PNG (20 Mo max.) est envoyé séparément, validé côté serveur, enregistré dans `storage/app/private` avec un SHA-256 et apparaît avec l’état « Reçue · OCR à venir ». Un hash déjà présent dans la même société renvoie une demande de confirmation avant tout nouvel enregistrement. Les utilisateurs société autorisés peuvent consulter et télécharger les documents, sans pouvoir importer s’ils n’ont pas le rôle requis.
+
+L’import n’exécute pas encore d’OCR, d’analyse IA, de rapprochement fournisseur ou de validation comptable. Les anciennes tables du prototype sont conservées sans migration automatique vers le nouveau schéma. La documentation du module est dans [`docs/modules/documents/`](docs/modules/documents/).
 
 ### Aperçu UI sans PHP/MySQL
 
@@ -74,18 +80,19 @@ Les tests Laravel configurent SQLite en mémoire. Pour les phases futures, les t
 ## Structure utile
 
 ```text
-app/Models/                 Cabinet, User, Company et référentiels/écritures
-app/Policies/               Autorisations d’accès aux sociétés et données comptables
+app/Models/                 Cabinet, User, Company, factures et référentiels/écritures
+app/Policies/               Autorisations d’accès aux sociétés et données métier
 app/Services/AccountingData/ Service idempotent des données comptables d’exemple
-app/Http/Controllers/       Auth, tableau de bord, gestion et consultation comptable
-app/Http/Requests/          Validation serveur
-resources/js/Pages/         Pages Inertia React, dont AccountingData/Show
-resources/js/Components/    Coquille, toasts et composants partagés
+app/Services/Invoices/      Stockage privé et persistance des imports de facture
+app/Http/Controllers/       Auth, tableau de bord, société, comptabilité et factures
+app/Http/Requests/          Validation serveur des formulaires et uploads
+resources/js/Pages/         Pages Inertia React, dont AccountingData/Show et Invoices/Index
+resources/js/Components/    Coquille, navigation, toasts et composants partagés
 resources/css/app.css       Tailwind et styles applicatifs
-database/migrations/        Schéma, Phase 2 et migrations de compatibilité
+database/migrations/        Schémas Phase 1–3 et migrations historiques/compatibilité
 database/seeders/           Cabinet et référentiels fictifs local/test
 docs/requirements.md        Cahier des charges fourni
 docs/modules/               PRD/README techniques par module
 ```
 
-Les migrations historiques créent encore les tables `documents` et `accounting_entries` du premier prototype, mais leurs modèles et routes ont été retirés. Elles ne représentent pas le futur schéma facture ; la Phase 3 introduira explicitement `invoices`/`invoice_lines` et traitera la migration ou suppression de ces anciennes données sans perte silencieuse.
+Les migrations historiques créent encore les tables `documents` et `accounting_entries` du premier prototype, mais leurs modèles et routes ont été retirés. La Phase 3 introduit le nouveau schéma `invoices`/`invoice_lines` sans modifier les anciennes tables. Aucune donnée historique n’est copiée ou supprimée automatiquement ; toute migration ou suppression future devra être explicite et précédée d’une sauvegarde.

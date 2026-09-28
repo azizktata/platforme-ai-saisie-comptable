@@ -1,5 +1,5 @@
 import { Link, useForm } from '@inertiajs/react';
-import { BookOpenText, Building2, PencilLine, Users } from 'lucide-react';
+import { BookOpenText, Building2, FileText, PencilLine, Users } from 'lucide-react';
 import type { FormEvent, ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { CompanySummary } from '../types';
@@ -54,12 +54,20 @@ export default function CompanyProfileCard({ company, canEdit }: Props) {
         <div className="flex justify-between gap-3"><dt className="text-slate-500">Devise</dt><dd className="text-right font-medium text-slate-700">{company.currency || 'À configurer'}</dd></div>
       </dl>
 
-      <Link
-        href={`/companies/${company.id}/accounting-data`}
-        className="mt-4 inline-flex items-center gap-2 rounded-lg bg-teal-50 px-3 py-2 text-sm font-semibold text-teal-800 transition hover:bg-teal-100"
-      >
-        <BookOpenText size={16} /> Données comptables
-      </Link>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Link
+          href={`/companies/${company.id}/accounting-data`}
+          className="inline-flex items-center gap-2 rounded-lg bg-teal-50 px-3 py-2 text-sm font-semibold text-teal-800 transition hover:bg-teal-100"
+        >
+          <BookOpenText size={16} /> Données comptables
+        </Link>
+        <Link
+          href={`/companies/${company.id}/invoices`}
+          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-800"
+        >
+          <FileText size={16} /> Factures
+        </Link>
+      </div>
 
       {canEdit && (
         <details className="group mt-4 border-t border-slate-100 pt-3">

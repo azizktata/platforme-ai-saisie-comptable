@@ -134,6 +134,7 @@ export default function AccountingDataShow({
   return (
     <AppShell
       activeSection="accounting"
+      companyId={company.id}
       cabinetName={auth?.cabinet?.name}
       canManageCabinet={auth?.canManageCabinet}
       user={auth?.user}

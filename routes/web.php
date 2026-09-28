@@ -5,6 +5,7 @@ use App\Http\Controllers\AuthenticatedSessionController;
 use App\Http\Controllers\CabinetUserController;
 use App\Http\Controllers\CompanyController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\InvoiceController;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware('guest')->group(function (): void {
@@ -25,6 +26,12 @@ Route::middleware('auth')->group(function (): void {
         ->name('companies.accounting-data');
     Route::post('/companies/{company}/accounting-data/demo', [AccountingDataController::class, 'seedDemo'])
         ->name('companies.accounting-data.demo');
+    Route::get('/companies/{company}/invoices', [InvoiceController::class, 'index'])
+        ->name('companies.invoices.index');
+    Route::post('/companies/{company}/invoices/upload', [InvoiceController::class, 'upload'])
+        ->name('companies.invoices.upload');
+    Route::get('/companies/{company}/invoices/{invoice}/file', [InvoiceController::class, 'download'])
+        ->name('companies.invoices.download');
     Route::get('/cabinet/users', [CabinetUserController::class, 'index'])->name('cabinet.users.index');
     Route::post('/cabinet/users', [CabinetUserController::class, 'store'])->name('cabinet.users.store');
     Route::put('/cabinet/users/{user}', [CabinetUserController::class, 'update'])->name('cabinet.users.update');
