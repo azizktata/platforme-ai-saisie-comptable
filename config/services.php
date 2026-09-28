@@ -6,5 +6,6 @@ return [
         'base_url' => env('MISTRAL_BASE_URL', 'https://api.mistral.ai'),
         'ocr_model' => env('MISTRAL_OCR_MODEL', 'mistral-ocr-latest'),
         'ocr_timeout' => (int) env('MISTRAL_OCR_TIMEOUT', 180),
+        'ca_bundle' => env('MISTRAL_CA_BUNDLE'),
     ],
 ];

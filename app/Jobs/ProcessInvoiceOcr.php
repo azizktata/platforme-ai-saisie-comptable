@@ -86,6 +86,7 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
                     'invoice_id' => $invoice->id,
                     'company_id' => $invoice->company_id,
                     'error_code' => $exception->errorCode,
+                    'transport_error' => $exception->diagnostic,
                     'attempt' => $invoice->ocr_attempts,
                 ]);
 
@@ -197,6 +198,7 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
     {
         return match ($errorCode) {
             'configuration_missing' => 'La clé Mistral OCR n’est pas configurée sur le serveur.',
+            'tls_ca_bundle_invalid', 'tls_certificate_verification_failed' => 'Échec de vérification TLS. Vérifiez le bundle CA de PHP ou configurez MISTRAL_CA_BUNDLE.',
             'provider_authentication_failed' => 'Mistral OCR a refusé l’authentification. Vérifiez la configuration du serveur.',
             'provider_rejected_request', 'invalid_provider_response', 'invalid_structured_annotation' => 'La réponse OCR n’a pas pu être validée. Le document peut être vérifié ou relancé.',
             'source_file_missing', 'source_file_unreadable', 'source_file_invalid_path' => 'Le document privé n’a pas pu être lu pour le traitement OCR.',
