@@ -44,6 +44,10 @@ php artisan serve --host=0.0.0.0
 
 Ouvrez l’URL affichée par Artisan. L’administrateur peut créer des sociétés et des comptes depuis l’interface. Pour créer le premier cabinet en production, utilisez `php artisan cabinet:create` (invite interactive, mot de passe masqué et minimum 12 caractères). Pour ajouter un utilisateur en ligne de commande à un cabinet existant : `php artisan users:create {slug-du-cabinet}`.
 
+#### Dépannage Vite (`ERR_ADDRESS_INVALID`)
+
+Vite écoute sur `0.0.0.0` afin d’accepter les connexions, mais le navigateur doit charger les assets depuis une adresse routable. `VITE_DEV_SERVER_ORIGIN` vaut `http://127.0.0.1:5173` par défaut. Ne le définissez pas à `http://0.0.0.0:5173`. Après changement de cette valeur, arrêtez Vite ; si `public/hot` subsiste alors que Vite est arrêté, supprimez ce fichier puis relancez `npm run dev`.
+
 ### Aperçu UI sans PHP/MySQL
 
 ```bash
