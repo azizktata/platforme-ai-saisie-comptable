@@ -36,4 +36,9 @@ class CompanyPolicy
         return $user->isCabinetAdmin()
             || $user->companyRole($company) === User::COMPANY_ROLE_INVOICE_MANAGER;
     }
+
+    public function manageInvoices(User $user, Company $company): bool
+    {
+        return $this->manageAccountingData($user, $company);
+    }
 }

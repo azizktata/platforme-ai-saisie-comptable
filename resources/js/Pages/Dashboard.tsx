@@ -1,5 +1,5 @@
 import { router } from '@inertiajs/react';
-import { ArrowRight, Building2, CircleCheck, ShieldCheck, Users } from 'lucide-react';
+import { ArrowRight, Building2, CircleCheck, FileText, ShieldCheck, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import AppShell from '../Components/AppShell';
 import type { ReactNode } from 'react';
@@ -87,13 +87,22 @@ export default function Dashboard({ cabinet, companies, canManageCabinet, auth }
                     <span>{company.tax_identifier || 'Matricule fiscal à renseigner'}</span>
                     <span className="inline-flex items-center gap-1"><Users size={13} /> {company.users_count} membre{company.users_count > 1 ? 's' : ''}</span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => router.visit(`/companies/${company.id}/accounting-data`)}
-                    className="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-teal-700 hover:text-teal-900"
-                  >
-                    Données comptables <ArrowRight size={15} />
-                  </button>
+                  <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2">
+                    <button
+                      type="button"
+                      onClick={() => router.visit(`/companies/${company.id}/accounting-data`)}
+                      className="inline-flex items-center gap-1 text-sm font-semibold text-teal-700 hover:text-teal-900"
+                    >
+                      Données comptables <ArrowRight size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => router.visit(`/companies/${company.id}/invoices`)}
+                      className="inline-flex items-center gap-1 text-sm font-semibold text-teal-700 hover:text-teal-900"
+                    >
+                      <FileText size={15} /> Factures <ArrowRight size={15} />
+                    </button>
+                  </div>
                 </article>
               ))}
             </div>

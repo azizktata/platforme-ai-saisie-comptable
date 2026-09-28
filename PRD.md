@@ -4,7 +4,7 @@
 
 Le cahier des charges et le prompt d’implémentation fournis par le client sont désormais consignés dans [`docs/requirements.md`](docs/requirements.md) et pilotent les décisions du produit. Ils remplacent le périmètre provisoire de saisie manuelle livré dans le premier commit.
 
-**État actuel : Phases 1 et 2 implémentées.** La fondation multi-cabinet, les rôles/affectations, les retours toast et les référentiels comptables par société sont présents. La Phase 2 fournit des modèles, migrations, un jeu Sage-like idempotent pour le développement/tests et une page de consultation ; aucune base Sage ni fichier `.mae` réel n’a été fourni. Les migrations et tests Laravel restent à exécuter dans un environnement avec PHP 8.3 et Composer. Les Phases 3 à 5 (factures, jobs OCR Mistral, analyse Mistral Small et validation humaine) ne sont pas implémentées.
+**État actuel : Phases 1 et 2 implémentées ; l’intake de la Phase 3 est en place.** La fondation multi-cabinet, les rôles/affectations, les retours toast, les référentiels comptables par société et le socle des factures sont présents. La Phase 3 fournit les tables `invoices`/`invoice_lines`, un import PDF/JPG/JPEG/PNG indépendant par fichier, un stockage privé, une détection de doublons SHA-256 avec confirmation et une liste sécurisée par société. Le traitement OCR, l’analyse comptable et la validation humaine restent différés. Aucune base Sage ni fichier `.mae` réel n’a été fourni. Les migrations et tests Laravel restent à exécuter dans un environnement avec PHP 8.3 et Composer.
 
 ## Vision
 
@@ -45,8 +45,8 @@ Transformer une facture fournisseur en proposition comptable vérifiable et cont
 |---|---|---|
 | 1 | Auth, cabinets, sociétés, utilisateurs, rôles, contrôle d’accès et retours UI | Implémentée ; runtime/tests à valider |
 | 2 | Référentiels comptables et données Sage mockées par société | Implémentée avec données fictives ; intégration Sage réelle différée |
-| 3 | Factures, lignes et import multiple | À faire |
-| 4 | Mistral OCR, jobs et états de traitement | À faire |
+| 3 | Schéma facture/lignes, intake multi-fichier, stockage privé, doublons et visibilité d’état | Intake implémenté ; tests Laravel à exécuter |
+| 4 | Mistral OCR, jobs et états de traitement | À faire — aucun OCR déclenché |
 | 5 | Proposition comptable, contrôles, validation humaine | À faire |
 
 Les critères détaillés, champs OCR, diagramme ERD, contrôles et stack sont dans [`docs/requirements.md`](docs/requirements.md). Chaque module conserve son PRD et son README technique sous `docs/modules/`.
