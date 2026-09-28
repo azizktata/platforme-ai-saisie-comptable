@@ -23,9 +23,11 @@ Fournir, pour chaque société, les référentiels et un historique d’écritur
 
 ## Parcours actuel
 
-1. L’utilisateur ouvre « Données comptables » depuis le tableau de bord ou la liste des sociétés.
-2. La page présente les comptes généraux/analytique, tiers, journaux et extrait historique autorisés pour cette société.
-3. Si aucun référentiel n’existe, un administrateur ou gestionnaire peut charger l’exemple en environnement `local`/`testing`. Le service serveur est idempotent ; la route est refusée ailleurs.
+1. L’utilisateur ouvre « Données comptables » depuis l’élément fixe de la navigation latérale. `/accounting-data` sélectionne la première société accessible s’il n’y en a pas encore dans la requête.
+2. Le sélecteur propose uniquement les sociétés accessibles au membre ou toutes celles du cabinet à son administrateur. Changer de société recharge la page globale avec les référentiels correspondants.
+3. L’URL société existante `/companies/{company}/accounting-data` reste disponible depuis le profil de l’entreprise.
+4. La page présente les comptes généraux/analytique, tiers, journaux et extrait historique autorisés pour la société sélectionnée.
+5. Si aucun référentiel n’existe, un administrateur ou gestionnaire peut charger l’exemple en environnement `local`/`testing`. Le service serveur est idempotent ; la route est refusée ailleurs.
 
 ## Hors périmètre
 

@@ -68,6 +68,8 @@ class AccountingDataTest extends TestCase
             ->assertInertia(fn (Assert $page) => $page
                 ->component('AccountingData/Show')
                 ->where('company.id', $visibleCompany->id)
+                ->has('companies', 1)
+                ->where('companies.0.id', $visibleCompany->id)
                 ->has('chartAccounts.data', 12)
                 ->has('analyticalAccounts.data', 3)
                 ->has('thirdParties.data', 3)
@@ -103,5 +105,42 @@ class AccountingDataTest extends TestCase
             'company_id' => $company->id,
             'code' => '000012',
         ]);
+    }
+
+    public function test_global_accounting_workspace_selects_only_companies_accessible_to_the_user(): void
+    {
+        $cabinet = Cabinet::factory()->create();
+        $admin = User::factory()->cabinetAdmin()->create(['cabinet_id' => $cabinet->id]);
+        $firstCompany = Company::factory()->create(['cabinet_id' => $cabinet->id, 'name' => 'A Société']);
+        $secondCompany = Company::factory()->create(['cabinet_id' => $cabinet->id, 'name' => 'B Société']);
+
+        $this->actingAs($admin)
+            ->get('/accounting-data')
+            ->assertRedirect(route('accounting-data.index', ['company_id' => $firstCompany->id]));
+
+        $this->actingAs($admin)
+            ->get(route('accounting-data.index', ['company_id' => $secondCompany->id]))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->component('AccountingData/Show')
+                ->where('company.id', $secondCompany->id)
+                ->has('companies', 2));
+
+        $member = User::factory()->create(['cabinet_id' => $cabinet->id]);
+        $foreignCompany = Company::factory()->create();
+        $member->companies()->attach($firstCompany, ['role' => User::COMPANY_ROLE_USER]);
+        $member->companies()->attach($foreignCompany, ['role' => User::COMPANY_ROLE_USER]);
+
+        $this->actingAs($member)
+            ->get(route('accounting-data.index', ['company_id' => $secondCompany->id]))
+            ->assertNotFound();
+
+        $this->actingAs($member)
+            ->get(route('accounting-data.index', ['company_id' => $foreignCompany->id]))
+            ->assertNotFound();
+
+        $this->actingAs($member)
+            ->get('/accounting-data')
+            ->assertRedirect(route('accounting-data.index', ['company_id' => $firstCompany->id]));
     }
 }

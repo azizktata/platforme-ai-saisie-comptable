@@ -4,11 +4,11 @@ Application de traitement comptable des factures fournisseurs, destinée aux cab
 
 ## État d’implémentation
 
-Les **Phases 1 à 4** sont implémentées : fondation multi-cabinet, authentification, rôles/affectations société, données comptables scoppées, intake privé des factures et extraction Mistral OCR asynchrone, structurée et auditable. La Phase 4 ajoute files Laravel, états/tentatives, lignes extraites, messages d’échec/relance et avertissements explicites de cohérence des totaux. Les migrations et tests Laravel doivent être exécutés localement avec PHP 8.3+/Composer.
+Les **Phases 1 à 4** sont implémentées : fondation multi-cabinet avec inscription du premier administrateur, paramètres du cabinet, rôles/affectations, catalogue d’activités par cabinet, données comptables scoppées, intake privé des factures et extraction Mistral OCR asynchrone, structurée et auditable. La navigation donne accès aux espaces globaux Factures et Données comptables avec sélecteurs limités aux sociétés autorisées ; l’historique des factures reste accessible par société. Le workspace Factures fournit l’export CSV de la sélection courante et un suivi de vérification humaine de l’extraction OCR, sans approbation comptable. La Phase 4 ajoute files Laravel, états/tentatives, lignes extraites, messages d’échec/relance et avertissements explicites de cohérence des totaux. Le build TypeScript peut être validé avec npm ; PHP/Composer ne sont pas disponibles dans l’environnement actuel, les migrations et tests Laravel n’y ont donc pas été exécutés.
 
-La Phase 2 utilise un jeu de démonstration déterministe de type Sage (12 comptes généraux, 3 comptes analytiques, 3 tiers, 4 journaux et 2 écritures équilibrées par société). Les codes sont stockés en texte, et les montants utilisent trois décimales pour les millimes tunisiens. Aucune base Sage ni aucun fichier `.mae` réel n’a été fourni : la synchronisation/import réel reste différé.
+La Phase 2 utilise un jeu de démonstration déterministe de type Sage (12 comptes généraux, 3 comptes analytiques, 3 tiers, 4 journaux et 2 écritures équilibrées par société). Les codes sont stockés en texte, et les montants utilisent trois décimales pour les millimes tunisiens. Le lien fixe « Données comptables » ouvre `/accounting-data` avec un sélecteur limité aux sociétés auxquelles l’utilisateur a accès ; le lien société historique reste disponible depuis son profil. Aucune base Sage ni aucun fichier `.mae` réel n’a été fourni : la synchronisation/import réel reste différé.
 
-La Phase 4 s’arrête à l’extraction OCR : aucune analyse Mistral Small, proposition comptable en partie double, validation humaine ou écriture comptable n’est encore implémentée (Phase 5). L’OCR utilise une clé Mistral serveur configurable ; les documents ne quittent le stockage privé que dans une requête vers le endpoint configuré. Le connecteur et l’export Sage réel attendent l’inspection du fichier `.mae` et la confirmation de la version Sage.
+La Phase 4 s’arrête à l’extraction OCR : aucune analyse Mistral Small, proposition comptable en partie double, validation humaine d’écriture ou comptabilisation n’est encore implémentée (Phase 5). L’OCR utilise une clé Mistral serveur configurable ; les documents ne quittent le stockage privé que dans une requête vers le endpoint configuré. Le connecteur et l’export Sage réel attendent l’inspection du fichier `.mae` et la confirmation de la version Sage.
 
 ## Stack
 
@@ -52,7 +52,7 @@ npm run dev
 php artisan serve --host=0.0.0.0
 ```
 
-Ouvrez l’URL affichée par Artisan. L’administrateur peut créer des sociétés et des comptes depuis l’interface. Pour créer le premier cabinet en production, utilisez `php artisan cabinet:create` (invite interactive, mot de passe masqué et minimum 12 caractères). Pour ajouter un utilisateur en ligne de commande à un cabinet existant : `php artisan users:create {slug-du-cabinet}`.
+Ouvrez l’URL affichée par Artisan. Un visiteur peut créer un cabinet et son premier administrateur depuis `/register` ; la commande `php artisan cabinet:create` reste disponible pour le provisionnement administré (invite interactive, mot de passe masqué et minimum 12 caractères). Les administrateurs peuvent ensuite gérer les sociétés, le catalogue d’activités et les utilisateurs depuis l’interface. Pour ajouter un utilisateur en ligne de commande à un cabinet existant : `php artisan users:create {slug-du-cabinet}`.
 
 #### Dépannage Vite (`ERR_ADDRESS_INVALID`)
 
@@ -60,15 +60,15 @@ Le serveur Vite de l’application écoute sur `127.0.0.1:5173` en port strict. 
 
 ## Retours d’action
 
-Les succès des mutations (connexion/déconnexion, sociétés, profils et accès utilisateurs) affichent un toast Sonner ; les erreurs de validation et les réponses réseau/serveur inattendues affichent un toast d’erreur. L’import de factures confirme les réussites et signale les fichiers refusés individuellement sans annuler les autres. La liste des utilisateurs masque entièrement la section « Accès société » lorsque le rôle choisi est `cabinet_admin`.
+Les succès des mutations (connexion/inscription/déconnexion, cabinet, activités, sociétés, profils et accès utilisateurs) affichent un toast Sonner ; les erreurs de validation et les réponses réseau/serveur inattendues affichent un toast d’erreur. L’import de factures confirme les réussites et signale les fichiers refusés individuellement sans annuler les autres ; les actions de revue OCR et d’export CSV donnent également un retour. La liste des utilisateurs masque entièrement la section « Accès société » lorsque le rôle choisi est `cabinet_admin`.
 
 ## Intake et OCR des factures (Phases 3–4)
 
-Depuis « Factures » sur une société, un administrateur de cabinet ou gestionnaire autorisé peut sélectionner jusqu’à 300 fichiers. Chaque PDF/JPG/JPEG/PNG (20 Mo max.) est envoyé séparément, validé côté serveur et enregistré dans `storage/app/private` avec un SHA-256 ; un hash déjà présent dans la même société exige une confirmation. Les utilisateurs société autorisés peuvent consulter et télécharger les documents privés, sans pouvoir importer s’ils n’ont pas le rôle requis.
+Le lien fixe « Factures » ouvre `/invoices`, où l’utilisateur sélectionne une société accessible. Un administrateur de cabinet ou gestionnaire autorisé peut ensuite sélectionner jusqu’à 300 fichiers. Chaque PDF/JPG/JPEG/PNG (20 Mo max.) est envoyé séparément, validé côté serveur et enregistré dans le stockage privé avec un SHA-256 ; un hash déjà présent dans la même société exige une confirmation. Les utilisateurs société autorisés peuvent consulter et télécharger les documents privés, sans pouvoir importer s’ils n’ont pas le rôle requis. L’historique complet reste disponible à `/companies/{company}/invoices`.
 
-Chaque nouvel import est mis en file sur `ocr` après persistance. Le worker envoie le document au Mistral OCR configurable, valide le JSON strict, puis persiste la réponse brute, les champs et les lignes extraits, le modèle/usage ainsi que les erreurs/tentatives. L’interface actualise l’avancement et permet une relance autorisée. Les totaux incohérents ou non vérifiables sont signalés ; aucun montant n’est corrigé automatiquement. Les factures importées sous l’ancien état `uploaded` peuvent être lancées manuellement depuis l’interface.
+Chaque nouvel import est mis en file sur `ocr` après persistance. Le worker envoie le document au Mistral OCR configurable, valide le JSON strict, puis persiste la réponse brute, les champs et lignes extraits, le modèle/usage ainsi que les erreurs/tentatives. L’interface actualise l’avancement et permet une relance autorisée. Les totaux incohérents ou non vérifiables sont signalés ; aucun montant n’est corrigé automatiquement. L’utilisateur peut exporter en CSV les factures sélectionnées sur la page courante ; un gestionnaire peut marquer des extractions terminées comme vérifiées, ce qui ne valide pas une écriture comptable. Les factures importées sous l’ancien état `uploaded` peuvent être lancées manuellement depuis l’interface.
 
-Les résultats OCR nécessitent une vérification humaine ; aucune analyse Mistral Small, proposition comptable ou écriture validée n’est créée (Phase 5). Les anciennes tables du prototype sont conservées sans migration automatique vers le nouveau schéma. La documentation détaillée est dans [`docs/modules/documents/`](docs/modules/documents/) et [`docs/modules/invoice-processing/`](docs/modules/invoice-processing/).
+Les résultats OCR nécessitent une vérification humaine ; aucune analyse Mistral Small, proposition comptable ou écriture validée n’est créée (Phase 5). Le suivi de vérification porte sur la transcription OCR uniquement. Les anciennes tables du prototype sont conservées sans migration automatique vers le nouveau schéma. La documentation détaillée est dans [`docs/modules/documents/`](docs/modules/documents/) et [`docs/modules/invoice-processing/`](docs/modules/invoice-processing/).
 
 ### Aperçu UI sans PHP/MySQL
 
@@ -96,12 +96,12 @@ app/Services/AccountingData/ Service idempotent des données comptables d’exem
 app/Services/Invoices/      Stockage privé et persistance des imports de facture
 app/Services/Ocr/           Contrat Mistral, schéma structuré et cohérence des totaux
 app/Jobs/                   Traitement OCR indépendant par facture
-app/Http/Controllers/       Auth, tableau de bord, société, comptabilité et factures
-app/Http/Requests/          Validation serveur des formulaires et uploads
-resources/js/Pages/         Pages Inertia React, dont AccountingData/Show et Invoices/Index
-resources/js/Components/    Coquille, navigation, toasts et composants partagés
+app/Http/Controllers/       Auth, cabinet, tableau de bord, société, comptabilité et factures
+app/Http/Requests/          Validation serveur des formulaires, catalogues et uploads
+resources/js/Pages/         Pages Inertia React, dont Cabinet/Settings, AccountingData/Show et Invoices/Index
+resources/js/Components/    Coquille, navigation, sélecteurs, toasts et composants partagés
 resources/css/app.css       Tailwind et styles applicatifs
-database/migrations/        Schémas Phase 1–3 et migrations historiques/compatibilité
+database/migrations/        Schémas Phase 1–4 et migrations historiques/compatibilité
 database/seeders/           Cabinet et référentiels fictifs local/test
 docs/requirements.md        Cahier des charges fourni
 docs/modules/               PRD/README techniques par module

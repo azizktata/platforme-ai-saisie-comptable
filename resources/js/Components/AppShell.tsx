@@ -1,9 +1,9 @@
 import { Link } from '@inertiajs/react';
-import { BookOpenText, Building2, FileCheck2, FileText, LayoutDashboard, LogOut, Menu, Users, X } from 'lucide-react';
+import { BookOpenText, Building2, FileCheck2, FileText, LayoutDashboard, LogOut, Menu, Settings2, Users, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import type { AuthUser } from '../types';
 
-type Section = 'overview' | 'companies' | 'accounting' | 'invoices' | 'users';
+type Section = 'overview' | 'companies' | 'accounting' | 'invoices' | 'cabinet' | 'users';
 type NavigationItem = {
   label: string;
   href: string;
@@ -18,12 +18,13 @@ type Props = {
   user?: AuthUser | null;
   cabinetName?: string | null;
   canManageCabinet?: boolean;
-  companyId?: number;
 };
 
 const baseNavigation: NavigationItem[] = [
   { label: 'Vue d’ensemble', href: '/', section: 'overview', icon: LayoutDashboard },
   { label: 'Sociétés', href: '/companies', section: 'companies', icon: Building2 },
+  { label: 'Factures', href: '/invoices', section: 'invoices', icon: FileText },
+  { label: 'Données comptables', href: '/accounting-data', section: 'accounting', icon: BookOpenText },
 ];
 
 function initials(name?: string | null): string {
@@ -39,30 +40,27 @@ export default function AppShell({
   user,
   cabinetName,
   canManageCabinet = false,
-  companyId,
 }: Props) {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const companyNavigation: NavigationItem[] = companyId === undefined ? [] : [
-    { label: 'Factures', href: `/companies/${companyId}/invoices`, section: 'invoices', icon: FileText },
-    { label: 'Données comptables', href: `/companies/${companyId}/accounting-data`, section: 'accounting', icon: BookOpenText },
-  ];
   const navigation: NavigationItem[] = [
     ...baseNavigation,
-    ...companyNavigation,
-    ...(canManageCabinet ? [{ label: 'Utilisateurs', href: '/cabinet/users', section: 'users' as const, icon: Users }] : []),
+    ...(canManageCabinet ? [
+      { label: 'Cabinet', href: '/cabinet/settings', section: 'cabinet' as const, icon: Settings2 },
+      { label: 'Utilisateurs', href: '/cabinet/users', section: 'users' as const, icon: Users },
+    ] : []),
   ];
   const sectionLabels: Record<Section, string> = {
     overview: 'Vue d’ensemble',
     companies: 'Sociétés',
     accounting: 'Données comptables',
     invoices: 'Factures',
+    cabinet: 'Cabinet',
     users: 'Utilisateurs',
   };
 
   const renderLink = (item: NavigationItem) => {
     const Icon = item.icon;
-    const isActive = activeSection === item.section
-      || (!companyId && (activeSection === 'accounting' || activeSection === 'invoices') && item.section === 'companies');
+    const isActive = activeSection === item.section;
     const className = `sidebar-link ${isActive ? 'sidebar-link--active' : ''}`;
     const handleClick = () => setMobileOpen(false);
     const content = (

@@ -14,6 +14,7 @@ class OcrProviderException extends RuntimeException
         public readonly bool $retryable,
         string $message,
         public readonly ?array $rawResponse = null,
+        public readonly ?string $diagnostic = null,
     ) {
         parent::__construct($message);
     }

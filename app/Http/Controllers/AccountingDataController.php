@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Models\Company;
+use App\Models\User;
 use App\Services\AccountingData\SeedDemoAccountingData;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -11,10 +13,42 @@ use Inertia\Response;
 
 class AccountingDataController extends Controller
 {
+    public function workspace(Request $request): Response|RedirectResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+        $this->authorize('viewAny', Company::class);
+        $companies = $this->accessibleCompanies($user);
+
+        if ($companies->isEmpty()) {
+            return to_route('companies.index');
+        }
+
+        $requestedCompanyId = $request->query('company_id');
+
+        if ($requestedCompanyId === null || $requestedCompanyId === '') {
+            return to_route('accounting-data.index', ['company_id' => $companies->first()->id]);
+        }
+
+        abort_unless(is_string($requestedCompanyId) && ctype_digit($requestedCompanyId), 404);
+        $company = $companies->firstWhere('id', (int) $requestedCompanyId);
+        abort_unless($company instanceof Company, 404);
+
+        return $this->renderCompanyData($request, $company, $companies);
+    }
+
     public function show(Request $request, Company $company): Response
     {
         $this->authorize('view', $company);
+        /** @var User $user */
+        $user = $request->user();
+        $companies = $this->accessibleCompanies($user);
 
+        return $this->renderCompanyData($request, $company, $companies);
+    }
+
+    private function renderCompanyData(Request $request, Company $company, Collection $companies): Response
+    {
         $chartAccounts = $company->chartAccounts()
             ->orderBy('code')
             ->paginate(25, ['id', 'code', 'label', 'account_type', 'is_active'], 'accounts_page')
@@ -69,7 +103,9 @@ class AccountingDataController extends Controller
                 ])->values(),
             ]);
 
-        $canManage = $request->user()->can('manageAccountingData', $company);
+        /** @var User $user */
+        $user = $request->user();
+        $canManage = $user->can('manageAccountingData', $company);
         $hasAccountingData = $chartAccounts->total() > 0
             || $analyticalAccounts->total() > 0
             || $thirdParties->total() > 0
@@ -77,6 +113,7 @@ class AccountingDataController extends Controller
             || $entries->total() > 0;
 
         return Inertia::render('AccountingData/Show', [
+            'companies' => $this->companyOptions($companies),
             'company' => [
                 'id' => $company->id,
                 'name' => $company->name,
@@ -91,6 +128,21 @@ class AccountingDataController extends Controller
                 && app()->environment(['local', 'testing'])
                 && ! $hasAccountingData,
         ]);
+    }
+
+    private function accessibleCompanies(User $user): Collection
+    {
+        return $user->isCabinetAdmin()
+            ? $user->cabinet->companies()->orderBy('name')->get()
+            : $user->companies()->where('companies.cabinet_id', $user->cabinet_id)->orderBy('name')->get();
+    }
+
+    private function companyOptions(Collection $companies): array
+    {
+        return $companies->map(fn (Company $item): array => [
+            'id' => $item->id,
+            'name' => $item->name,
+        ])->values()->all();
     }
 
     public function seedDemo(

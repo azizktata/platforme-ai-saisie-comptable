@@ -57,6 +57,8 @@ class Invoice extends Model
         'ocr_failed_at',
         'ocr_error_code',
         'ocr_error_message',
+        'ocr_reviewed_at',
+        'ocr_reviewed_by',
     ];
 
     protected function casts(): array
@@ -86,6 +88,8 @@ class Invoice extends Model
             'ocr_started_at' => 'datetime',
             'ocr_completed_at' => 'datetime',
             'ocr_failed_at' => 'datetime',
+            'ocr_reviewed_at' => 'datetime',
+            'ocr_reviewed_by' => 'integer',
         ];
     }
 
@@ -102,6 +106,11 @@ class Invoice extends Model
     public function uploader(): BelongsTo
     {
         return $this->belongsTo(User::class, 'uploaded_by');
+    }
+
+    public function ocrReviewer(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'ocr_reviewed_by');
     }
 
     public function lines(): HasMany

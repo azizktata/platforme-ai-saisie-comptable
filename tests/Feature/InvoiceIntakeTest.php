@@ -41,9 +41,10 @@ class InvoiceIntakeTest extends TestCase
         $this->assertSame('ocr_queued', $invoice->status);
         Storage::disk('local')->assertExists($invoice->file_path);
         Queue::assertPushedOn('ocr', ProcessInvoiceOcr::class, fn (ProcessInvoiceOcr $job): bool => $job->invoiceId === $invoice->id && $job->companyId === $company->id);
+        Queue::assertPushed(ProcessInvoiceOcr::class, fn (ProcessInvoiceOcr $job): bool => $job->connection === 'database');
 
         $this->actingAs($manager)
-            ->get(route('companies.invoices.index', $company))
+            ->get(route('invoices.index', ['company_id' => $company->id]))
             ->assertOk()
             ->assertInertia(fn (Assert $page) => $page
                 ->component('Invoices/Index')
@@ -95,7 +96,7 @@ class InvoiceIntakeTest extends TestCase
         $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
 
         $this->actingAs($reader)
-            ->get(route('companies.invoices.index', $company))
+            ->get(route('invoices.index', ['company_id' => $company->id]))
             ->assertOk()
             ->assertInertia(fn (Assert $page) => $page
                 ->component('Invoices/Index')
@@ -144,7 +145,7 @@ class InvoiceIntakeTest extends TestCase
 
         $this->actingAs($manager)
             ->post(route('companies.invoices.ocr.retry', [$company, $failedInvoice]))
-            ->assertRedirect(route('companies.invoices.index', $company));
+            ->assertRedirect(route('invoices.index', ['company_id' => $company->id]));
 
         $failedInvoice->refresh();
         $this->assertSame('ocr_queued', $failedInvoice->status);
@@ -164,7 +165,7 @@ class InvoiceIntakeTest extends TestCase
 
         $this->actingAs($manager)
             ->post(route('companies.invoices.ocr.retry', [$company, $legacyInvoice]))
-            ->assertRedirect(route('companies.invoices.index', $company));
+            ->assertRedirect(route('invoices.index', ['company_id' => $company->id]));
 
         $this->assertSame('ocr_queued', $legacyInvoice->fresh()->status);
         Queue::assertPushed(ProcessInvoiceOcr::class, 2);
@@ -206,6 +207,134 @@ class InvoiceIntakeTest extends TestCase
         $this->postUpload($secondManager, $secondCompany, $sameFileContents)->assertCreated();
 
         $this->assertDatabaseCount('invoices', 2);
+    }
+
+    public function test_global_invoice_workspace_scopes_the_selected_company_and_preserves_company_history(): void
+    {
+        $cabinet = Cabinet::factory()->create();
+        $admin = User::factory()->cabinetAdmin()->create(['cabinet_id' => $cabinet->id]);
+        $firstCompany = Company::factory()->create(['cabinet_id' => $cabinet->id]);
+        $secondCompany = Company::factory()->create(['cabinet_id' => $cabinet->id]);
+        $firstInvoice = $this->createInvoice($firstCompany, 'premiere.pdf', 'ocr_completed');
+        $firstInvoice->forceFill([
+            'ocr_reviewed_at' => now(),
+            'ocr_reviewed_by' => $admin->id,
+        ])->save();
+        $expectedReviewedAt = $firstInvoice->fresh()->ocr_reviewed_at->toIso8601String();
+        $this->createInvoice($secondCompany, 'seconde.pdf');
+
+        $this->actingAs($admin)
+            ->get(route('invoices.index'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->component('Invoices/Index')
+                ->where('mode', 'workspace')
+                ->where('company', null)
+                ->where('invoices', null)
+                ->where('canUploadInvoices', false)
+                ->has('companies', 2));
+
+        $this->actingAs($admin)
+            ->get(route('invoices.index', ['company_id' => $firstCompany->id]))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('mode', 'workspace')
+                ->where('company.id', $firstCompany->id)
+                ->where('canUploadInvoices', true)
+                ->where('canReviewInvoices', true)
+                ->where('invoices.total', 1)
+                ->where('invoices.data.0.id', $firstInvoice->id)
+                ->where('invoices.data.0.ocr_reviewed_at', $expectedReviewedAt));
+
+        $this->actingAs($admin)
+            ->get(route('companies.invoices.index', $firstCompany))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('mode', 'history')
+                ->where('company.id', $firstCompany->id)
+                ->where('invoices.total', 1));
+    }
+
+    public function test_global_invoice_workspace_only_offers_and_serves_companies_the_user_can_access(): void
+    {
+        $cabinet = Cabinet::factory()->create();
+        $user = User::factory()->create(['cabinet_id' => $cabinet->id]);
+        $visibleCompany = Company::factory()->create(['cabinet_id' => $cabinet->id]);
+        $hiddenCompany = Company::factory()->create(['cabinet_id' => $cabinet->id]);
+        $foreignCompany = Company::factory()->create();
+        $user->companies()->attach($visibleCompany, ['role' => User::COMPANY_ROLE_USER]);
+        $user->companies()->attach($foreignCompany, ['role' => User::COMPANY_ROLE_USER]);
+        $this->createInvoice($visibleCompany, 'visible.pdf');
+        $this->createInvoice($hiddenCompany, 'hidden.pdf');
+        $this->createInvoice($foreignCompany, 'foreign.pdf');
+
+        $this->actingAs($user)
+            ->get(route('invoices.index'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->has('companies', 1)
+                ->where('companies.0.id', $visibleCompany->id)
+                ->where('canUploadInvoices', false));
+
+        $this->actingAs($user)
+            ->get(route('invoices.index', ['company_id' => $hiddenCompany->id]))
+            ->assertNotFound();
+
+        $this->actingAs($user)
+            ->get(route('invoices.index', ['company_id' => $foreignCompany->id]))
+            ->assertNotFound();
+    }
+
+    public function test_invoice_manager_can_bulk_mark_only_completed_company_extractions_as_reviewed(): void
+    {
+        $cabinet = Cabinet::factory()->create();
+        $company = Company::factory()->create(['cabinet_id' => $cabinet->id]);
+        $otherCompany = Company::factory()->create(['cabinet_id' => $cabinet->id]);
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $reader = $this->companyUser($company, User::COMPANY_ROLE_USER);
+        $completed = $this->createInvoice($company, 'completed.pdf', 'ocr_completed');
+        $anotherCompleted = $this->createInvoice($company, 'another-completed.pdf', 'ocr_completed');
+        $pending = $this->createInvoice($company, 'pending.pdf', 'ocr_queued');
+        $foreign = $this->createInvoice($otherCompany, 'foreign.pdf', 'ocr_completed');
+
+        $this->actingAs($reader)
+            ->post(route('companies.invoices.bulk-review', $company), ['invoice_ids' => [$completed->id]])
+            ->assertForbidden();
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.bulk-review', $company), ['invoice_ids' => [$completed->id, $foreign->id]])
+            ->assertSessionHasErrors('invoice_ids');
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.bulk-review', $company), ['invoice_ids' => [$pending->id]])
+            ->assertSessionHasErrors('invoice_ids');
+
+        $this->assertNull($completed->fresh()->ocr_reviewed_at);
+        $this->assertNull($anotherCompleted->fresh()->ocr_reviewed_at);
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.bulk-review', $company), ['invoice_ids' => [$completed->id, $anotherCompleted->id]])
+            ->assertRedirect(route('invoices.index', ['company_id' => $company->id]));
+
+        foreach ([$completed, $anotherCompleted] as $invoice) {
+            $this->assertNotNull($invoice->fresh()->ocr_reviewed_at);
+            $this->assertSame($manager->id, $invoice->fresh()->ocr_reviewed_by);
+        }
+
+    }
+
+    private function createInvoice(Company $company, string $filename, string $status = 'uploaded'): Invoice
+    {
+        return $company->invoices()->create([
+            'storage_disk' => 'local',
+            'file_path' => "companies/{$company->id}/invoices/{$filename}",
+            'original_filename' => $filename,
+            'mime_type' => 'application/pdf',
+            'size_bytes' => 12,
+            'file_sha256' => hash('sha256', $company->id.'-'.$filename),
+            'status' => $status,
+            'ocr_warnings' => [],
+        ]);
     }
 
     private function postUpload(User $user, Company $company, UploadedFile $file, bool $confirmDuplicate = false): TestResponse

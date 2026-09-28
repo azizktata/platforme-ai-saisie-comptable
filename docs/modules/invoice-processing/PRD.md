@@ -22,7 +22,15 @@ Après l’enregistrement privé d’une facture, extraire ses informations et l
 - `ocr_failed` : traitement arrêté ou tentatives épuisées ; message et tentative visibles, relance manuelle disponible aux gestionnaires autorisés.
 - `uploaded` : état historique de factures Phase 3. Un gestionnaire peut démarrer manuellement l’OCR depuis la liste.
 
-La page actualise les éléments en cours toutes les cinq secondes, affiche les erreurs, avertissements de totaux et permet la relance. L’annotation reste une extraction et n’est ni une proposition comptable ni une écriture validée. Mistral Small, l’analyse comptable et la revue d’écriture restent en Phase 5.
+La page actualise les éléments en cours toutes les cinq secondes, affiche les erreurs, avertissements de totaux et permet la relance. L’annotation reste une extraction et n’est ni une proposition comptable ni une écriture validée.
+
+## Espace Factures et vérification OCR
+
+- `/invoices` est l’espace global de travail, accessible depuis un lien fixe de la navigation. Un sélecteur propose uniquement les sociétés accessibles ; l’import et la relance sont ensuite limités à la société sélectionnée et à son rôle d’accès.
+- `/companies/{company}/invoices` est conservé comme historique complet en lecture/téléchargement pour la société.
+- Dans le workspace, l’utilisateur peut sélectionner les factures visibles de la page et exporter les champs affichés au format CSV. L’export concerne uniquement la sélection présente sur la page courante.
+- Un gestionnaire autorisé peut marquer en une action les extractions `ocr_completed` sélectionnées comme vérifiées. La migration `2026_09_28_000020` conserve l’horodatage et l’utilisateur (`ocr_reviewed_at`, `ocr_reviewed_by`). Cette vérification porte sur la transcription OCR seulement : elle n’approuve pas de traitement comptable et ne crée aucune écriture.
+- Mistral Small, la proposition comptable et la revue/validation d’écriture restent en Phase 5.
 
 ## Limites et décisions de Phase 4
 
@@ -43,3 +51,5 @@ La page actualise les éléments en cours toutes les cinq secondes, affiche les 
 6. Une incohérence ou un contrôle impossible est explicitement visible, sans réécriture des valeurs OCR.
 7. Le périmètre société et le stockage privé sont préservés, et aucun compte, journal, proposition ou écriture comptable n’est créé.
 8. Les appels HTTP des tests sont simulés ; aucun secret Mistral réel n’est requis.
+9. Le workspace global limite le sélecteur, les actions et l’historique aux sociétés autorisées ; l’URL historique société est conservée.
+10. L’export CSV ne comprend que la sélection de la page courante ; la revue groupée n’accepte que des extractions OCR terminées et ne réalise aucune validation comptable.

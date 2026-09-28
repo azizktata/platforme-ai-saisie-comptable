@@ -38,10 +38,22 @@ class UpdateCompanyRequest extends FormRequest
             ],
             'legal_name' => ['nullable', 'string', 'max:190'],
             'tax_identifier' => ['nullable', 'string', 'max:80'],
-            'activity' => ['nullable', 'string', 'max:190'],
+            'activity' => ['nullable', 'string', 'max:190', Rule::in($this->activityOptions($company))],
             'sector' => ['nullable', 'string', 'max:190'],
             'country_code' => ['nullable', 'string', 'size:2'],
             'currency' => ['nullable', 'string', 'size:3'],
         ];
+    }
+
+    private function activityOptions(?Company $company): array
+    {
+        $cabinetActivities = $company?->cabinet?->activities()->pluck('name')->all() ?? [];
+        $activities = [...config('company_activities', []), ...$cabinetActivities];
+
+        if (filled($company?->activity)) {
+            $activities[] = $company->activity;
+        }
+
+        return array_values(array_unique($activities));
     }
 }

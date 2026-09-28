@@ -3,12 +3,15 @@ import type { FormEvent, ReactNode } from 'react';
 import { Building2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import AppShell from '../../Components/AppShell';
+import CompanyActivitySelect from '../../Components/CompanyActivitySelect';
 import CompanyProfileCard from '../../Components/CompanyProfileCard';
 import type { CompanySummary, SharedAuthProps } from '../../types';
 
 type Props = {
   companies: CompanySummary[];
   canCreateCompany: boolean;
+  canManageActivities: boolean;
+  activities: string[];
   auth?: SharedAuthProps;
 };
 
@@ -24,7 +27,7 @@ type CompanyForm = {
 
 const inputClass = 'mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-teal-600 focus:ring-2 focus:ring-teal-100';
 
-export default function CompaniesIndex({ companies, canCreateCompany, auth }: Props) {
+export default function CompaniesIndex({ companies, canCreateCompany, canManageActivities, activities, auth }: Props) {
   const form = useForm<CompanyForm>({
     name: '',
     legal_name: '',
@@ -82,9 +85,11 @@ export default function CompaniesIndex({ companies, canCreateCompany, auth }: Pr
               <Field label="Matricule fiscal" error={form.errors.tax_identifier}>
                 <input className={inputClass} value={form.data.tax_identifier} onChange={(event) => form.setData('tax_identifier', event.target.value)} maxLength={80} />
               </Field>
-              <Field label="Activité" error={form.errors.activity}>
-                <input className={inputClass} value={form.data.activity} onChange={(event) => form.setData('activity', event.target.value)} maxLength={190} />
-              </Field>
+              <div>
+                <label htmlFor="new-company-activity" className="block text-sm font-medium text-slate-700">Activité principale</label>
+                <CompanyActivitySelect id="new-company-activity" value={form.data.activity} activities={activities} canAdd={canManageActivities} onChange={(activity) => form.setData('activity', activity)} />
+                {form.errors.activity && <p className="mt-1 text-xs text-red-700">{form.errors.activity}</p>}
+              </div>
               <Field label="Secteur" error={form.errors.sector}>
                 <input className={inputClass} value={form.data.sector} onChange={(event) => form.setData('sector', event.target.value)} maxLength={190} />
               </Field>
@@ -109,7 +114,7 @@ export default function CompaniesIndex({ companies, canCreateCompany, auth }: Pr
         {companies.length ? (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {companies.map((company) => (
-              <CompanyProfileCard key={company.id} company={company} canEdit={canCreateCompany} />
+              <CompanyProfileCard key={company.id} company={company} canEdit={canCreateCompany} activities={activities} canManageActivities={canManageActivities} />
             ))}
           </div>
         ) : (

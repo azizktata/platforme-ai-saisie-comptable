@@ -21,7 +21,7 @@ class CompanyManagementTest extends TestCase
             'name' => 'Entreprise Exemple',
             'legal_name' => 'Entreprise Exemple SARL',
             'tax_identifier' => '1234567A',
-            'activity' => 'Services informatiques',
+            'activity' => 'Services informatiques et télécommunications',
             'country_code' => 'tn',
             'currency' => 'tnd',
         ])->assertRedirect('/companies');
@@ -32,6 +32,31 @@ class CompanyManagementTest extends TestCase
             'country_code' => 'TN',
             'currency' => 'TND',
         ]);
+    }
+
+    public function test_company_activity_must_come_from_the_predefined_or_cabinet_catalog(): void
+    {
+        $cabinet = Cabinet::factory()->create();
+        $admin = User::factory()->cabinetAdmin()->create(['cabinet_id' => $cabinet->id]);
+        $cabinet->activities()->create(['name' => 'Services numériques']);
+
+        $this->actingAs($admin)->post('/companies', [
+            'name' => 'Société catalogue',
+            'activity' => 'Services numériques',
+            'country_code' => 'TN',
+            'currency' => 'TND',
+        ])->assertRedirect('/companies');
+
+        $this->assertDatabaseHas('companies', [
+            'cabinet_id' => $cabinet->id,
+            'name' => 'Société catalogue',
+            'activity' => 'Services numériques',
+        ]);
+
+        $this->actingAs($admin)->from('/companies')->post('/companies', [
+            'name' => 'Société activité inconnue',
+            'activity' => 'Activité non enregistrée',
+        ])->assertSessionHasErrors('activity');
     }
 
     public function test_company_manager_cannot_create_a_company(): void
@@ -52,7 +77,7 @@ class CompanyManagementTest extends TestCase
             'name' => 'Nom mis à jour',
             'legal_name' => 'Nom légal mis à jour',
             'tax_identifier' => '9876543Z',
-            'activity' => 'Conseil',
+            'activity' => 'Services professionnels et conseil',
             'sector' => 'Services',
             'country_code' => 'tn',
             'currency' => 'tnd',
@@ -83,7 +108,9 @@ class CompanyManagementTest extends TestCase
         $user = User::factory()->create(['cabinet_id' => $cabinet->id]);
         $visible = Company::factory()->create(['cabinet_id' => $cabinet->id, 'name' => 'Visible']);
         Company::factory()->create(['cabinet_id' => $cabinet->id, 'name' => 'Non affectée']);
+        $foreignCompany = Company::factory()->create(['name' => 'Autre cabinet']);
         $user->companies()->attach($visible, ['role' => User::COMPANY_ROLE_INVOICE_MANAGER]);
+        $user->companies()->attach($foreignCompany, ['role' => User::COMPANY_ROLE_INVOICE_MANAGER]);
 
         $this->actingAs($user)
             ->get('/companies')
