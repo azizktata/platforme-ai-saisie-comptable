@@ -12,7 +12,7 @@ Après l’enregistrement privé d’une facture, extraire ses informations et l
 4. Mistral retourne une annotation JSON contrainte par un schéma strict. `InvoiceOcrSchema` vérifie champs, types, longueurs, dates, devises, taux, montants décimaux et lignes. Les sorties inconnues, tronquées ou invalides ne sont pas persistées comme données de facture.
 5. Dans une transaction, les champs validés, le JSON structuré, la réponse Mistral complète, le modèle, les informations d’usage et les lignes numérotées sont enregistrés ensemble. Le succès passe à `ocr_completed`.
 6. Les totaux ne sont jamais recalculés ou corrigés silencieusement. Si les sept montants nécessaires sont présents, le contrôle exact au millime vérifie `HT + TVA + FODEC + autres taxes + timbre − retenue = total`. Un désaccord crée `invoice_total_mismatch`; un composant manquant crée `invoice_totals_unverified`. Ces avertissements ne modifient aucune valeur extraite.
-7. Une erreur non récupérable passe à `ocr_failed` immédiatement. Les erreurs réseau, limitations de débit et erreurs 5xx sont réessayées trois fois avec délais croissants ; après épuisement, le job marque l’échec et conserve un code/message sûr. Un document défaillant n’empêche pas les autres jobs de la file.
+7. Une erreur non récupérable passe à `ocr_failed` immédiatement. Les erreurs réseau transitoires, limitations de débit et erreurs 5xx sont réessayées jusqu’à trois fois avec délais croissants ; les erreurs de configuration TLS/certificat sont non réessayables et affichent un diagnostic sûr. Après épuisement, le job marque l’échec avec un code/message sûr. Un document défaillant n’empêche pas les autres jobs de la file.
 
 ## États et visibilité
 
@@ -36,6 +36,7 @@ La page actualise les éléments en cours toutes les cinq secondes, affiche les 
 
 - Entrées : PDF/JPG/JPEG/PNG privés, 20 Mo maximum par fichier.
 - Transport vers Mistral : data URL encodée en base64 ; aucun upload préalable dans l’espace Fichiers Mistral.
+- Le transport HTTPS conserve la vérification des certificats. `MISTRAL_CA_BUNDLE` accepte un chemin local vers un bundle CA PEM optionnel pour corriger le trust store du PHP worker ; aucune option ne permet de désactiver la vérification.
 - Les valeurs manquantes, ambiguës ou illisibles restent `null`. Les montants/taux sont stockés avec trois décimales ; les taux globaux ne sont retournés que lorsqu’un taux unique est explicitement imprimé. Les taux par ligne restent dans `invoice_lines`.
 - Le contrôle de total n’affirme pas qu’une composante absente vaut zéro : il signale que le total ne peut pas être vérifié.
 - La réponse brute est conservée pour l’audit, y compris lorsqu’une annotation JSON est rejetée. Les secrets et corps de réponse ne sont pas écrits dans les logs.
@@ -53,3 +54,4 @@ La page actualise les éléments en cours toutes les cinq secondes, affiche les 
 8. Les appels HTTP des tests sont simulés ; aucun secret Mistral réel n’est requis.
 9. Le workspace global limite le sélecteur, les actions et l’historique aux sociétés autorisées ; l’URL historique société est conservée.
 10. L’export CSV ne comprend que la sélection de la page courante ; la revue groupée n’accepte que des extractions OCR terminées et ne réalise aucune validation comptable.
+11. Le client TLS valide toujours la chaîne de certificats ; un bundle PEM optionnel peut être configuré, et une erreur de confiance CA est affichée comme un problème de configuration non réessayable.

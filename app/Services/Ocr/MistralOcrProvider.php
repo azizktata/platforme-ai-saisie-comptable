@@ -78,12 +78,29 @@ class MistralOcrProvider implements OcrProvider
         $document = $this->documentChunk($invoice->mime_type, $contents);
         $baseUrl = rtrim((string) config('services.mistral.base_url', 'https://api.mistral.ai'), '/');
         $timeout = max(1, (int) config('services.mistral.ocr_timeout', 180));
+        $verify = true;
+        $caBundle = config('services.mistral.ca_bundle');
+
+        if (is_string($caBundle) && trim($caBundle) !== '') {
+            $caBundle = trim($caBundle);
+
+            if (! is_file($caBundle) || ! is_readable($caBundle)) {
+                throw new OcrProviderException(
+                    'tls_ca_bundle_invalid',
+                    false,
+                    'Le fichier de certificats TLS configuré pour Mistral est absent ou illisible.',
+                );
+            }
+
+            $verify = $caBundle;
+        }
 
         try {
             $response = Http::acceptJson()
                 ->withToken($apiKey)
                 ->connectTimeout(min(30, $timeout))
                 ->timeout($timeout)
+                ->withOptions(['verify' => $verify])
                 ->post($baseUrl.'/v1/ocr', [
                     'model' => config('services.mistral.ocr_model', 'mistral-moderation-2603'),
                     'document' => $document,
@@ -94,6 +111,15 @@ class MistralOcrProvider implements OcrProvider
                     'table_format' => 'markdown',
                 ]);
         } catch (ConnectionException $exception) {
+            if ($this->isCertificateVerificationFailure($exception->getMessage())) {
+                throw new OcrProviderException(
+                    'tls_certificate_verification_failed',
+                    false,
+                    'Échec de vérification TLS. Vérifiez le bundle CA de PHP ou configurez MISTRAL_CA_BUNDLE.',
+                    diagnostic: 'TLS certificate verification failed; check PHP CA settings or MISTRAL_CA_BUNDLE.',
+                );
+            }
+
             throw new OcrProviderException(
                 'provider_unreachable',
                 true,
@@ -173,6 +199,18 @@ class MistralOcrProvider implements OcrProvider
             model: $providerResponse['model'],
             usage: is_array($providerResponse['usage_info'] ?? null) ? $providerResponse['usage_info'] : [],
         );
+    }
+
+    private function isCertificateVerificationFailure(string $message): bool
+    {
+        $message = strtolower($message);
+
+        return str_contains($message, 'curl error 60:')
+            || str_contains($message, 'curl error 77:')
+            || str_contains($message, 'ssl certificate problem')
+            || str_contains($message, 'unable to get local issuer certificate')
+            || str_contains($message, 'certificate verify failed')
+            || str_contains($message, 'error setting certificate file');
     }
 
     private function safeTransportDiagnostic(string $message): string

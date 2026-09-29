@@ -31,19 +31,37 @@ La page `Invoices/Index` actualise les statuts en cours, indique les erreurs et 
 
 ## Configuration et worker
 
-Dans `.env`, renseigner une clé serveur `MISTRAL_API_KEY`, éventuellement `MISTRAL_BASE_URL`, `MISTRAL_OCR_MODEL` et `MISTRAL_OCR_TIMEOUT`. Appliquer les migrations (dont `jobs` et `failed_jobs`) et garder un worker actif :
+Dans `.env`, renseigner une clé serveur `MISTRAL_API_KEY`, éventuellement `MISTRAL_BASE_URL`, `MISTRAL_OCR_MODEL`, `MISTRAL_OCR_TIMEOUT` et `MISTRAL_CA_BUNDLE` (chemin absolu optionnel vers un bundle de certificats CA au format PEM). Appliquer les migrations (dont `jobs` et `failed_jobs`) et garder un worker actif :
 
 ```bash
 php artisan queue:work database --queue=ocr --tries=3 --timeout=210
 ```
 
-`ProcessInvoiceOcr` sélectionne explicitement `database`; modifier `QUEUE_CONNECTION=sync` ne rend donc pas ces jobs OCR synchrones. Vérifier le worker, la connexion base de données et l’accès sortant au endpoint Mistral séparément. Garder `DB_QUEUE_RETRY_AFTER=300`, supérieur au délai d’expiration du job. Un diagnostic `provider_unreachable` apparaît après qu’un worker a pris le job mais n’a pas pu joindre le fournisseur ; cela ne prouve pas que le PNG ou les options `table_format`/`include_image_base64` sont en cause. Aucun test runtime n’est fait avec une clé réelle.
+`ProcessInvoiceOcr` sélectionne explicitement `database`; modifier `QUEUE_CONNECTION=sync` ne rend donc pas ces jobs OCR synchrones. Vérifier le worker, la connexion base de données et l’accès sortant au endpoint Mistral séparément. Garder `DB_QUEUE_RETRY_AFTER=300`, supérieur au délai d’expiration du job. Un diagnostic `provider_unreachable` apparaît après qu’un worker a pris le job mais n’a pas pu joindre le fournisseur. Aucun test runtime n’est fait avec une clé réelle.
+
+### Windows / cURL error 60
+
+`SSL certificate problem: unable to get local issuer certificate` (cURL 60) indique que le PHP utilisé par le worker ne dispose pas d’un bundle CA approprié pour vérifier le certificat HTTPS. La négociation TLS échoue avant que le endpoint puisse traiter le fichier ; ce n’est pas une erreur de PNG. Mistral documente PNG comme format pris en charge pour `image_url` et l’envoi d’image Base64 ([OCR Processor](https://docs.mistral.ai/studio/document-processing/basic_ocr)).
+
+Solutions sûres :
+
+1. Télécharger le bundle CA PEM actuel depuis [curl.se/caextract](https://curl.se/docs/caextract.html), le sauvegarder localement, puis configurer son chemin absolu dans `.env`, par exemple `MISTRAL_CA_BUNDLE=C:/php/extras/ssl/cacert.pem`. L’option est appliquée uniquement à la requête Mistral et conserve la vérification TLS.
+2. Ou configurer le `php.ini` utilisé par le PHP en ligne de commande :
+
+```ini
+curl.cainfo = "C:/php/extras/ssl/cacert.pem"
+openssl.cafile = "C:/php/extras/ssl/cacert.pem"
+```
+
+Pour identifier le bon fichier, lancer `php --ini` dans le même terminal/environnement que le worker. Après changement de `.env`, vider le cache de configuration si nécessaire (`php artisan config:clear`) et redémarrer entièrement `queue:work`; un worker déjà lancé conserve son processus/configuration. Le chemin déclaré via `MISTRAL_CA_BUNDLE` doit exister et être lisible. Le code traite maintenant les erreurs de certificat comme non réessayables, avec un message de configuration explicite, au lieu de brûler les trois tentatives. Après correction, relancer la facture en échec depuis l’espace Factures ; les anciens jobs échoués ne remettent pas automatiquement l’état facture à `ocr_queued`.
+
+Ne désactivez pas la vérification TLS (`verify=false`, `CURLOPT_SSL_VERIFYPEER=false`) et n’ajoutez pas de certificats non fiables. Garder `MISTRAL_API_KEY` secrète.
 
 Vérifier les exigences de confidentialité, région, conservation et traitement des factures avant d’activer la clé en production. Les documents quittent le stockage privé uniquement dans la requête du fournisseur configuré.
 
 ## Vérifications
 
-- `tests/Feature/InvoiceOcrProcessingTest.php` utilise `Http::fake()` pour succès structuré, réponse invalide, incohérence/non-vérifiabilité des montants et absence de clé.
+- `tests/Feature/InvoiceOcrProcessingTest.php` utilise `Http::fake()` pour succès structuré, réponse invalide, incohérence/non-vérifiabilité des montants, absence de clé, bundle CA invalide et échec de vérification TLS non réessayable.
 - `tests/Feature/InvoiceIntakeTest.php` couvre intake, queue, isolation, historique/workspace, doublons, relance et revue groupée.
 - `composer test` nécessite PHP 8.3+ et Composer ; `npm run build` valide l’interface.
 

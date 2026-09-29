@@ -9,6 +9,7 @@ use App\Models\Company;
 use App\Models\Invoice;
 use App\Services\Ocr\InvoiceTotalsConsistencyChecker;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -25,6 +26,7 @@ class InvoiceOcrProcessingTest extends TestCase
         config()->set('services.mistral.api_key', 'test-mistral-key');
         config()->set('services.mistral.base_url', 'https://api.mistral.ai');
         config()->set('services.mistral.ocr_model', 'mistral-ocr-latest');
+        config()->set('services.mistral.ca_bundle', null);
     }
 
     public function test_ocr_extracts_validated_invoice_and_lines_and_keeps_raw_response(): void
@@ -177,6 +179,44 @@ class InvoiceOcrProcessingTest extends TestCase
         $invoice->refresh();
         $this->assertSame('ocr_failed', $invoice->status);
         $this->assertSame('configuration_missing', $invoice->ocr_error_code);
+        $this->assertSame(1, $invoice->ocr_attempts);
+    }
+
+    public function test_invalid_ca_bundle_fails_without_retrying_or_sending_a_request(): void
+    {
+        Storage::fake('local');
+        $invoice = $this->queuedInvoice();
+        $missingCaBundle = sys_get_temp_dir()
+            .DIRECTORY_SEPARATOR.'missing-mistral-ca-bundle-'.bin2hex(random_bytes(8)).'.pem';
+        config()->set('services.mistral.ca_bundle', $missingCaBundle);
+        Http::preventStrayRequests();
+
+        $this->runJob($invoice);
+
+        $invoice->refresh();
+        $this->assertSame('ocr_failed', $invoice->status);
+        $this->assertSame('tls_ca_bundle_invalid', $invoice->ocr_error_code);
+        $this->assertSame(1, $invoice->ocr_attempts);
+    }
+
+    public function test_tls_certificate_failure_is_not_retried_and_has_an_actionable_error(): void
+    {
+        Storage::fake('local');
+        $invoice = $this->queuedInvoice();
+        Http::fake([
+            'https://api.mistral.ai/v1/ocr' => function (): never {
+                throw new ConnectionException(
+                    'cURL error 60: SSL certificate problem: unable to get local issuer certificate',
+                );
+            },
+        ]);
+
+        $this->runJob($invoice);
+
+        $invoice->refresh();
+        $this->assertSame('ocr_failed', $invoice->status);
+        $this->assertSame('tls_certificate_verification_failed', $invoice->ocr_error_code);
+        $this->assertStringContainsString('vérification TLS', $invoice->ocr_error_message);
         $this->assertSame(1, $invoice->ocr_attempts);
     }
 

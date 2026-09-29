@@ -43,7 +43,7 @@ Pour activer l’OCR, configurez `MISTRAL_API_KEY` côté serveur dans `.env`, p
 php artisan queue:work database --queue=ocr --tries=3 --timeout=210
 ```
 
-`DB_QUEUE_RETRY_AFTER=300` doit rester supérieur au timeout du job. Sans clé Mistral, les uploads restent privés mais les jobs échouent rapidement avec une erreur visible et peuvent être relancés après configuration. N’exposez jamais la clé au navigateur. Consultez [`docs/modules/invoice-processing/README.md`](docs/modules/invoice-processing/README.md) pour le détail de l’API, des états et du contrôle des totaux.
+`DB_QUEUE_RETRY_AFTER=300` doit rester supérieur au timeout du job. Sans clé Mistral, les uploads restent privés mais les jobs échouent rapidement avec une erreur visible et peuvent être relancés après configuration. Sur Windows, un `cURL error 60` nécessite un bundle CA PHP valide (`MISTRAL_CA_BUNDLE` ou les réglages `curl.cainfo`/`openssl.cafile` du `php.ini` CLI) ; ne désactivez pas la vérification TLS. Après toute modification, redémarrez le worker. N’exposez jamais la clé au navigateur. Consultez [`docs/modules/invoice-processing/README.md`](docs/modules/invoice-processing/README.md) pour le détail de l’API, des états et du dépannage TLS.
 
 Lancez Vite et Laravel dans deux terminaux :
 
