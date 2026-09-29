@@ -16,6 +16,8 @@ return [
         'api_key' => env('OPENROUTER_API_KEY'),
         'endpoint' => env('OPENROUTER_ENDPOINT', 'https://openrouter.ai/api/v1/chat/completions'),
         'model' => env('OPENROUTER_MODEL', 'openrouter/free'),
+        'extraction_model' => env('OPENROUTER_EXTRACTION_MODEL', 'qwen/qwen3.8-27b:free'),
+        'extraction_max_tokens' => (int) env('OPENROUTER_EXTRACTION_MAX_TOKENS', 2500),
         'timeout' => (int) env('OPENROUTER_TIMEOUT', 120),
         'site_url' => env('OPENROUTER_SITE_URL'),
         'app_name' => env('OPENROUTER_APP_NAME', env('APP_NAME', 'ComptaFlow')),

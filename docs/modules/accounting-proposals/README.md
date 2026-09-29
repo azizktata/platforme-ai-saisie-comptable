@@ -7,6 +7,8 @@ OpenRouter est appelé côté serveur pour structurer le texte OCR.space puis pr
 ```dotenv
 OPENROUTER_API_KEY=...
 OPENROUTER_MODEL=openrouter/free
+OPENROUTER_EXTRACTION_MODEL=qwen/qwen3.8-27b:free
+OPENROUTER_EXTRACTION_MAX_TOKENS=2500
 OPENROUTER_ENDPOINT=https://openrouter.ai/api/v1/chat/completions
 OPENROUTER_TIMEOUT=120
 OPENROUTER_MAX_OCR_CHARS=100000
@@ -16,7 +18,7 @@ OPENROUTER_APP_NAME=ComptaFlow
 OPENROUTER_CA_BUNDLE=
 ```
 
-`openrouter/free` route dynamiquement vers un modèle gratuit prenant en charge le JSON Schema strict ; le modèle retourné, l’usage et la réponse complète sont conservés pour audit. La disponibilité des modèles gratuits dépend d’OpenRouter. Gardez la vérification TLS activée et ne placez jamais la clé dans le navigateur ou les logs. Le démarrage des jobs nécessite un worker Laravel sur la file `ocr` :
+La structuration OCR utilise par défaut Qwen3.8 27B gratuit, avec `reasoning.effort=none`, JSON Schema strict et 2 500 tokens de sortie. `InvoiceOcrSchema` normalise puis valide en Laravel les valeurs brutes retournées. L’analyse comptable utilise `openrouter/free`, qui route dynamiquement vers un modèle gratuit compatible avec la sortie structurée ; modèle retourné, usage et réponse complète sont conservés pour audit. La disponibilité des modèles gratuits dépend d’OpenRouter. Gardez la vérification TLS activée et ne placez jamais la clé dans le navigateur ou les logs. Le démarrage des jobs nécessite un worker Laravel sur la file `ocr` :
 
 ```bash
 php artisan queue:work database --queue=ocr --tries=3 --timeout=210

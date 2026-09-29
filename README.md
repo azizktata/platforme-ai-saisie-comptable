@@ -1,6 +1,6 @@
 # Plateforme AI de saisie comptable automatisée
 
-Application de traitement de factures fournisseurs pour cabinets gérant plusieurs sociétés. Le cahier des charges client est la source de vérité : [`docs/requirements.md`](docs/requirements.md). La dernière décision pipeline est OCR.space Free Engine 3 par défaut, OpenRouter `openrouter/free` pour structurer la transcription puis analyser la comptabilité, Mistral OCR conservé comme fournisseur sélectionnable.
+Application de traitement de factures fournisseurs pour cabinets gérant plusieurs sociétés. Le cahier des charges client est la source de vérité : [`docs/requirements.md`](docs/requirements.md). La dernière décision pipeline est OCR.space Free Engine 3 par défaut, Qwen3.8 27B gratuit avec raisonnement désactivé pour structurer la transcription via OpenRouter, OpenRouter `openrouter/free` pour l’analyse comptable, et Mistral OCR comme fournisseur sélectionnable.
 
 ## État d’implémentation
 
@@ -40,6 +40,8 @@ OCR_SPACE_ENGINE=3
 # Structuration du texte OCR.space et proposition comptable
 OPENROUTER_API_KEY=...
 OPENROUTER_MODEL=openrouter/free
+OPENROUTER_EXTRACTION_MODEL=qwen/qwen3.8-27b:free
+OPENROUTER_EXTRACTION_MAX_TOKENS=2500
 OPENROUTER_ENDPOINT=https://openrouter.ai/api/v1/chat/completions
 OPENROUTER_TIMEOUT=120
 OPENROUTER_MAX_OCR_CHARS=100000
@@ -49,7 +51,7 @@ OPENROUTER_MAX_OCR_CHARS=100000
 # MISTRAL_API_KEY=...
 ```
 
-`openrouter/free` route dynamiquement vers un modèle gratuit compatible JSON Schema strict ; le modèle réellement retourné est conservé pour audit, mais disponibilité et modèle peuvent varier. OCR.space Free limite un fichier à 1 Mo et les PDF à trois pages. Mistral reste disponible via `OCR_PROVIDER=mistral` ; son annotation structurée évite la normalisation OpenRouter, mais la proposition comptable utilise OpenRouter.
+L’extraction utilise par défaut le modèle gratuit Qwen3.8 27B, qui prend en charge les sorties structurées ; `reasoning.effort=none` désactive son mode de réflexion et la limite de sortie est de 2 500 tokens (configurable de 2 000 à 3 000). Le modèle est configurable via `OPENROUTER_EXTRACTION_MODEL`. Le schéma JSON strict est transmis à OpenRouter ; Laravel normalise et valide les dates, devises et montants avant persistance. `openrouter/free` reste le modèle par défaut de l’analyse comptable, son modèle réellement retourné étant conservé pour audit. Les modèles gratuits et leur disponibilité peuvent changer. OCR.space Free limite un fichier à 1 Mo et les PDF à trois pages. Mistral reste disponible via `OCR_PROVIDER=mistral` ; son annotation structurée évite l’étape de structuration OpenRouter, mais la proposition comptable utilise OpenRouter.
 
 Démarrez un worker dans un terminal distinct :
 

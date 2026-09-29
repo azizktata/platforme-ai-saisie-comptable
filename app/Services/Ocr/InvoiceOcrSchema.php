@@ -2,6 +2,7 @@
 
 namespace App\Services\Ocr;
 
+use DateTimeImmutable;
 use Illuminate\Support\Facades\Validator;
 use InvalidArgumentException;
 
@@ -59,9 +60,9 @@ class InvoiceOcrSchema
             $properties[$field] = $this->nullableString($definition['description']);
         }
 
-        $properties['invoice_date'] = $this->nullableString('Date de facture au format ISO YYYY-MM-DD, uniquement si complète et lisible.');
-        $properties['due_date'] = $this->nullableString('Date d’échéance au format ISO YYYY-MM-DD, uniquement si complète et lisible.');
-        $properties['currency'] = $this->nullableString('Code de devise ISO 4217 en trois lettres majuscules.');
+        $properties['invoice_date'] = $this->nullableString('Date de facture telle qu’imprimée, si elle est lisible.');
+        $properties['due_date'] = $this->nullableString('Date d’échéance telle qu’imprimée, si elle est lisible.');
+        $properties['currency'] = $this->nullableString('Devise ou code de devise tel qu’imprimé.');
 
         foreach (self::INVOICE_RATE_FIELDS as $field => $description) {
             $properties[$field] = $this->nullableRate($description);
@@ -101,9 +102,7 @@ class InvoiceOcrSchema
     public function annotationPrompt(): string
     {
         return <<<'PROMPT'
-Extract only information explicitly visible on this supplier invoice. Return null for any missing, unreadable, or ambiguous value. Do not infer, calculate, reconcile, or invent amounts, tax rates, dates, identifiers, bank details, or line items. Do not create accounting accounts, journals, or accounting entries.
-
-Return monetary amounts, quantities, unit prices, and rates as decimal strings using a dot as the decimal separator, no thousands separator, and at most three decimal places. Return dates only as YYYY-MM-DD when the complete date is legible. Return currency only as a three-letter uppercase ISO 4217 code when certain. Preserve printed descriptions and references. Put FODEC in its dedicated fields and use other_tax only for a separate tax. Return an invoice-level VAT or FODEC rate only when one unique global rate is explicitly printed; when rates vary by line, return null at invoice level and preserve the individual line rates. Keep invoice-level totals distinct from line-level amounts.
+Extract only information explicitly visible on this supplier invoice. Return null for any missing, unreadable, or ambiguous value. Copy dates, currency labels, amounts, quantities, and rates as printed; Laravel will normalize and validate them. Do not infer, invent, calculate, sum, or reconcile any value. Preserve printed descriptions and references. Put FODEC in its dedicated fields and use other_tax only for a separate tax. Return an invoice-level VAT or FODEC rate only when one unique global rate is explicitly printed; when rates vary by line, return null at invoice level and preserve the individual line rates. Keep invoice-level totals distinct from line-level amounts. Do not create accounting accounts, journals, or accounting entries.
 PROMPT;
     }
 
@@ -129,6 +128,8 @@ PROMPT;
         if ($unexpectedFields !== []) {
             throw new InvalidArgumentException('The structured invoice annotation contains unsupported fields.');
         }
+
+        $data = $this->normalizeAnnotation($data);
 
         $rules = [
             'invoice_date' => ['present', 'nullable', 'date_format:Y-m-d'],
@@ -203,7 +204,7 @@ PROMPT;
     {
         return [
             'type' => ['string', 'null'],
-            'description' => $description.' Return as a decimal string with up to three fractional digits, or null if unavailable.',
+            'description' => $description.' Copy the printed value without converting separators or units; use null if unavailable.',
         ];
     }
 
@@ -211,8 +212,159 @@ PROMPT;
     {
         return [
             'type' => ['string', 'null'],
-            'description' => $description.' Return a decimal percentage string between 0 and 100, or null if unavailable.',
+            'description' => $description.' Copy the printed rate, including its percent marker if present; use null if unavailable.',
         ];
+    }
+
+    /** @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    private function normalizeAnnotation(array $data): array
+    {
+        foreach (['invoice_date', 'due_date'] as $field) {
+            $data[$field] = $this->normalizeDate($data[$field] ?? null);
+        }
+
+        $data['currency'] = $this->normalizeCurrency($data['currency'] ?? null);
+
+        foreach ([...array_keys(self::INVOICE_DECIMAL_FIELDS), ...array_keys(self::INVOICE_RATE_FIELDS), 'withholding_rate'] as $field) {
+            $data[$field] = $this->normalizeDecimal($data[$field] ?? null);
+        }
+
+        if (is_array($data['lines'] ?? null)) {
+            foreach ($data['lines'] as $index => $line) {
+                if (! is_array($line)) {
+                    continue;
+                }
+
+                foreach ([...array_keys(self::LINE_DECIMAL_FIELDS), 'vat_rate', 'fodec_rate'] as $field) {
+                    $line[$field] = $this->normalizeDecimal($line[$field] ?? null);
+                }
+
+                $data['lines'][$index] = $line;
+            }
+        }
+
+        return $data;
+    }
+
+    private function normalizeDate(mixed $value): mixed
+    {
+        if (! is_string($value)) {
+            return $value;
+        }
+
+        $value = trim($value);
+
+        foreach (['!Y-m-d', '!Y/m/d', '!Y.m.d', '!d/m/Y', '!d-m-Y', '!d.m.Y', '!j/n/Y'] as $format) {
+            $date = DateTimeImmutable::createFromFormat($format, $value);
+            $errors = DateTimeImmutable::getLastErrors();
+
+            if ($date !== false && ($errors === false || ($errors['warning_count'] === 0 && $errors['error_count'] === 0))) {
+                return $date->format('Y-m-d');
+            }
+        }
+
+        return null;
+    }
+
+    private function normalizeCurrency(mixed $value): mixed
+    {
+        if (! is_string($value)) {
+            return $value;
+        }
+
+        $value = trim($value);
+        $compact = mb_strtoupper(preg_replace('/[^A-Za-z]/u', '', $value) ?? '');
+
+        if (preg_match('/^[A-Z]{3}$/', $compact) === 1) {
+            return $compact;
+        }
+
+        return match (mb_strtolower($value)) {
+            'د.ت', 'د.ت.', 'دينار تونسي', 'دينار تونسيّ' => 'TND',
+            default => match ($compact) {
+                'DT', 'DNT', 'DINARTUNISIEN', 'DINARSTUNISIEN' => 'TND',
+                'EURO', 'EUROS' => 'EUR',
+                'US DOLLAR', 'USDOLLAR', 'US DOLLARS' => 'USD',
+                'POUNDSTERLING', 'BRITISHPOUND' => 'GBP',
+                default => null,
+            },
+        };
+    }
+
+    private function normalizeDecimal(mixed $value): mixed
+    {
+        if (! is_string($value)) {
+            return $value;
+        }
+
+        $raw = trim($value);
+
+        if ($raw === '') {
+            return null;
+        }
+
+        $isParenthesizedNegative = str_starts_with($raw, '(') && str_ends_with($raw, ')');
+
+        if ($isParenthesizedNegative) {
+            $raw = substr($raw, 1, -1);
+        }
+
+        $raw = str_replace(["\u{00A0}", "\u{202F}", ' ', "'", '’'], '', $raw);
+        $numeric = preg_replace('/[^0-9,.+\-]/u', '', $raw) ?? '';
+
+        if ($numeric === '' || preg_match('/\d/', $numeric) !== 1) {
+            return null;
+        }
+
+        $negative = $isParenthesizedNegative || str_starts_with($numeric, '-');
+
+        if (str_starts_with($numeric, '-') || str_starts_with($numeric, '+')) {
+            $numeric = substr($numeric, 1);
+        }
+
+        if (str_contains($numeric, '+') || str_contains($numeric, '-')) {
+            return $value;
+        }
+
+        $lastComma = strrpos($numeric, ',');
+        $lastDot = strrpos($numeric, '.');
+        $decimalSeparator = null;
+
+        if ($lastComma !== false && $lastDot !== false) {
+            $decimalSeparator = $lastComma > $lastDot ? ',' : '.';
+        } elseif ($lastComma !== false || $lastDot !== false) {
+            $separator = $lastComma !== false ? ',' : '.';
+            $parts = explode($separator, $numeric);
+
+            $allTrailingGroupsAreThousands = count($parts) > 2;
+
+            foreach (array_slice($parts, 1) as $part) {
+                $allTrailingGroupsAreThousands = $allTrailingGroupsAreThousands && strlen($part) === 3;
+            }
+
+            if (count($parts) === 2 || ! $allTrailingGroupsAreThousands) {
+                $decimalSeparator = $separator;
+            }
+        }
+
+        if ($decimalSeparator !== null) {
+            $position = strrpos($numeric, $decimalSeparator);
+            $whole = preg_replace('/[,.]/', '', substr($numeric, 0, $position)) ?? '';
+            $fraction = preg_replace('/[,.]/', '', substr($numeric, $position + 1)) ?? '';
+            $normalized = ($whole === '' ? '0' : $whole).($fraction === '' ? '' : '.'.$fraction);
+        } else {
+            $normalized = preg_replace('/[,.]/', '', $numeric) ?? '';
+        }
+
+        if ($negative && $normalized !== '0') {
+            $normalized = '-'.$normalized;
+        }
+
+        return preg_match('/^-?\d{1,15}(?:\.\d{1,3})?$/', $normalized) === 1
+            ? $normalized
+            : $value;
     }
 
     private function decimalRules(): array

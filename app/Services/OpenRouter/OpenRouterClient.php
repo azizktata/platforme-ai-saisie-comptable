@@ -13,8 +13,15 @@ class OpenRouterClient
     /**
      * @param list<array{role: string, content: string}> $messages
      * @param array<string, mixed> $responseFormat
+     * @param array<string, mixed>|null $reasoning
      */
-    public function completeJson(array $messages, array $responseFormat, int $maxTokens = 5000): StructuredAiResult
+    public function completeJson(
+        array $messages,
+        array $responseFormat,
+        int $maxTokens = 5000,
+        ?string $model = null,
+        ?array $reasoning = null,
+    ): StructuredAiResult
     {
         $apiKey = config('services.openrouter.api_key');
 
@@ -65,19 +72,25 @@ class OpenRouterClient
         $headers['X-OpenRouter-Title'] = (string) config('services.openrouter.app_name', config('app.name', 'ComptaFlow'));
 
         try {
+            $payload = [
+                'model' => $model ?? (string) config('services.openrouter.model', 'openrouter/free'),
+                'messages' => $messages,
+                'response_format' => $responseFormat,
+                'temperature' => 0,
+                'max_tokens' => min(max(256, $maxTokens), 12000),
+            ];
+
+            if ($reasoning !== null) {
+                $payload['reasoning'] = $reasoning;
+            }
+
             $response = Http::acceptJson()
                 ->withHeaders($headers)
                 ->withToken($apiKey)
                 ->connectTimeout(min(30, $timeout))
                 ->timeout($timeout)
                 ->withOptions(['verify' => $verify])
-                ->post($endpoint, [
-                    'model' => (string) config('services.openrouter.model', 'openrouter/free'),
-                    'messages' => $messages,
-                    'response_format' => $responseFormat,
-                    'temperature' => 0,
-                    'max_tokens' => min(max(256, $maxTokens), 12000),
-                ]);
+                ->post($endpoint, $payload);
         } catch (ConnectionException $exception) {
             if ($this->isCertificateVerificationFailure($exception->getMessage())) {
                 throw new AiProviderException(

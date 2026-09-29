@@ -2,7 +2,7 @@
 
 ## Source de vérité et état
 
-Le cahier des charges fourni par le client est consigné dans [`docs/requirements.md`](docs/requirements.md). La dernière demande remplace la proposition initiale Mistral Small : OCR.space Free Engine 3 reste l’OCR par défaut, OpenRouter `openrouter/free` structure le texte OCR et produit l’analyse comptable ; Mistral OCR reste sélectionnable pour fournir directement les données structurées.
+Le cahier des charges fourni par le client est consigné dans [`docs/requirements.md`](docs/requirements.md). La dernière demande remplace la proposition initiale Mistral Small : OCR.space Free Engine 3 reste l’OCR par défaut, Qwen3.8 27B gratuit via OpenRouter structure le texte avec le raisonnement désactivé, et OpenRouter `openrouter/free` produit l’analyse comptable ; Mistral OCR reste sélectionnable pour fournir directement les données structurées.
 
 **État actuel : Phases 1 à 5 implémentées au niveau applicatif ; les migrations/tests Laravel demandent une validation dans un environnement PHP/Composer.** La Phase 5 ajoute extraction structurée, complétude et correction humaine, propositions tenant-scoped, avertissements et validation/rejet humains. Le build TypeScript passe ; PHP/Composer ne sont pas installés dans l’environnement de travail courant.
 
@@ -22,7 +22,7 @@ Transformer une facture fournisseur en proposition comptable vérifiable, contex
 
 1. L’utilisateur autorisé importe un document dans le stockage privé ; chaque facture possède son état et son job.
 2. OCR.space Engine 3 Free transcrit la facture par défaut ; Mistral demeure configurable. Le texte OCR et la réponse brute sont consultables/audités.
-3. OpenRouter `openrouter/free` structure la transcription OCR.space conformément au schéma de facture. Les champs incomplets sont visibles et corrigibles ; ils bloquent l’analyse comptable. Le chemin Mistral conserve sa structure directe.
+3. Qwen3.8 27B gratuit via OpenRouter structure la transcription OCR.space au moyen du JSON Schema strict ; le raisonnement est désactivé, la sortie plafonnée à 2 500 tokens et la normalisation/validation effectuée dans Laravel. Les champs incomplets sont visibles et corrigibles ; ils bloquent l’analyse comptable. Le chemin Mistral conserve sa structure directe.
 4. Une fois complète, une seconde requête OpenRouter analyse la facture en utilisant uniquement les référentiels actifs, le profil et l’historique récent de la société.
 5. Les données et la proposition sont affichées avec les avertissements, les codes autorisés et les contrôles d’équilibre/total. Un gestionnaire peut corriger ou rejeter. Les corrections sont auditées et chaque nouvelle analyse conserve la version précédente.
 6. Seule la validation humaine explicite crée une écriture comptable liée à la facture. L’export Sage réel est différé jusqu’à inspection du format `.mae` et de la version Sage.

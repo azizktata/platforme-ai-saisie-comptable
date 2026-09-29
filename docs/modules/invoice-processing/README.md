@@ -17,6 +17,8 @@ Pour OCR.space et les propositions comptables, configurer OpenRouter :
 ```dotenv
 OPENROUTER_API_KEY=...
 OPENROUTER_MODEL=openrouter/free
+OPENROUTER_EXTRACTION_MODEL=qwen/qwen3.8-27b:free
+OPENROUTER_EXTRACTION_MAX_TOKENS=2500
 OPENROUTER_ENDPOINT=https://openrouter.ai/api/v1/chat/completions
 OPENROUTER_TIMEOUT=120
 OPENROUTER_MAX_OCR_CHARS=100000
@@ -25,7 +27,7 @@ OPENROUTER_APP_NAME=ComptaFlow
 OPENROUTER_CA_BUNDLE=
 ```
 
-`openrouter/free` route vers un modèle gratuit disponible compatible JSON Schema strict. Le modèle réellement renvoyé peut varier et est conservé en audit. Les documents quittent le stockage privé uniquement dans la requête du fournisseur configuré. Ne désactivez jamais la validation TLS et ne mettez pas les clés dans le navigateur ou le dépôt.
+L’extraction utilise par défaut Qwen3.8 27B gratuit, avec `reasoning.effort=none`, JSON Schema strict et 2 500 tokens de sortie (configurable entre 2 000 et 3 000). Le modèle d’extraction est configurable ; Laravel normalise et valide les valeurs OCR. Les propositions comptables utilisent toujours `openrouter/free`, dont le modèle réellement renvoyé varie et est conservé en audit. Les documents quittent le stockage privé uniquement dans la requête du fournisseur configuré. Ne désactivez jamais la validation TLS et ne mettez pas les clés dans le navigateur ou le dépôt.
 
 Appliquer les migrations puis faire tourner le worker (timeouts OCR/LLM jusqu’à 210 secondes, `DB_QUEUE_RETRY_AFTER` doit rester supérieur) :
 

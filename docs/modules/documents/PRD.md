@@ -8,7 +8,7 @@ Importer des factures fournisseur de façon sécurisée, suivre chaque étape de
 
 - Import privé de PDF/JPG/JPEG/PNG, validation côté serveur, empreinte SHA-256 par société et confirmation explicite des doublons.
 - OCR.space Engine 3 Free est le défaut et renvoie la transcription textuelle, affichée dans une boîte de dialogue dédiée. Mistral demeure sélectionnable et fournit directement les champs structurés.
-- Pour OCR.space, OpenRouter `openrouter/free` structure le texte en JSON strict conforme au contrat facture. OCR brut, texte, JSON extrait et réponse OpenRouter sont conservés séparément.
+- Pour OCR.space, Qwen3.8 27B gratuit via OpenRouter (raisonnement désactivé) structure le texte selon le JSON Schema strict du contrat facture ; Laravel normalise et valide la sortie. OCR brut, texte, JSON extrait et réponse OpenRouter sont conservés séparément.
 - Les informations obligatoires sont contrôlées ; en cas de donnée manquante, l’analyse comptable est bloquée et un gestionnaire peut corriger les champs.
 - Après complétude, OpenRouter établit une proposition en se limitant aux référentiels et à l’historique de la société. L’utilisateur voit les avertissements et peut corriger, rejeter ou explicitement valider.
 - Aucune écriture finale n’est créée avant validation humaine. L’écriture approuvée est liée à la facture, scoped au journal et aux comptes de la société.

@@ -21,10 +21,7 @@ return new class extends Migration
             $table->decimal('confidence', 5, 2)->nullable();
             $table->timestamps();
 
-            $table->unique(
-                ['accounting_proposal_id', 'line_number'],
-                'proposal_lines_proposal_line_unique'
-            );
+            $table->unique(['accounting_proposal_id', 'line_number']);
         });
     }
 

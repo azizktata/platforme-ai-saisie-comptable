@@ -41,6 +41,8 @@ class OpenRouterInvoicePipelineTest extends TestCase
         config()->set('services.openrouter.api_key', 'test-openrouter-key');
         config()->set('services.openrouter.endpoint', 'https://openrouter.ai/api/v1/chat/completions');
         config()->set('services.openrouter.model', 'openrouter/free');
+        config()->set('services.openrouter.extraction_model', 'qwen/qwen3.8-27b:free');
+        config()->set('services.openrouter.extraction_max_tokens', 2500);
         config()->set('services.openrouter.timeout', 120);
         config()->set('services.openrouter.ca_bundle', null);
         config()->set('services.openrouter.max_ocr_chars', 100000);
@@ -124,13 +126,39 @@ class OpenRouterInvoicePipelineTest extends TestCase
         $this->assertSame(3, $journalEntry->lines->count());
 
         Http::assertSent(function (ClientRequest $request) use ($ocrText): bool {
+            $data = $request->data();
+            $schemaName = $data['response_format']['json_schema']['name'] ?? null;
+            $expectedModel = $schemaName === 'supplier_invoice'
+                ? 'qwen/qwen3.8-27b:free'
+                : 'openrouter/free';
+
             if ($request->url() !== 'https://openrouter.ai/api/v1/chat/completions'
                 || ! $request->hasHeader('Authorization', 'Bearer test-openrouter-key')
-                || ($request->data()['model'] ?? null) !== 'openrouter/free') {
+                || ($data['model'] ?? null) !== $expectedModel) {
                 return false;
             }
 
-            return str_contains($request->data()['messages'][1]['content'] ?? '', $ocrText);
+            if ($schemaName === 'supplier_invoice'
+                && (($data['reasoning']['effort'] ?? null) !== 'none' || ($data['max_tokens'] ?? null) !== 2500)) {
+                return false;
+            }
+
+            return str_contains($data['messages'][1]['content'] ?? '', $ocrText);
+        });
+        Http::assertSent(function (ClientRequest $request): bool {
+            $data = $request->data();
+
+            if (($data['response_format']['json_schema']['name'] ?? null) !== 'supplier_invoice') {
+                return false;
+            }
+
+            $expectedSchema = app(InvoiceOcrSchema::class)->responseFormat();
+            $systemPrompt = $data['messages'][0]['content'] ?? '';
+
+            return $data['response_format'] === $expectedSchema
+                && str_contains($systemPrompt, 'Return only one JSON object')
+                && str_contains($systemPrompt, 'Laravel will normalize and validate')
+                && ! array_key_exists('explanation', $expectedSchema['json_schema']['schema']['properties']);
         });
         Http::assertSent(function (ClientRequest $request): bool {
             $data = $request->data();
@@ -147,6 +175,39 @@ class OpenRouterInvoicePipelineTest extends TestCase
                 && ! str_contains($context, 'Compte secret autre société');
         });
         Http::assertSentCount(3);
+    }
+
+    public function test_laravel_normalizes_printed_invoice_dates_amounts_rates_and_currency(): void
+    {
+        $invoiceData = $this->validInvoiceData();
+        $invoiceData['invoice_date'] = '29/09/2026';
+        $invoiceData['due_date'] = '30-09-2026';
+        $invoiceData['currency'] = 'Dinar tunisien';
+        $invoiceData['subtotal'] = '1 234,500 TND';
+        $invoiceData['vat_rate'] = '19 %';
+        $invoiceData['vat_amount'] = '234,555 TND';
+        $invoiceData['fodec_amount'] = '0,000';
+        $invoiceData['withholding_amount'] = '0,000';
+        $invoiceData['total_amount'] = '1 469,055 TND';
+        $invoiceData['lines'][0]['quantity'] = '2,000';
+        $invoiceData['lines'][0]['unit_price'] = '617,250';
+        $invoiceData['lines'][0]['subtotal'] = '1 234,500';
+        $invoiceData['lines'][0]['vat_rate'] = '19%';
+        $invoiceData['lines'][0]['vat_amount'] = '234,555';
+        $invoiceData['lines'][0]['total_amount'] = '1 469,055';
+
+        $normalized = app(InvoiceOcrSchema::class)->validate($invoiceData);
+
+        $this->assertSame('2026-09-29', $normalized['invoice_date']);
+        $this->assertSame('2026-09-30', $normalized['due_date']);
+        $this->assertSame('TND', $normalized['currency']);
+        $this->assertSame('1234.500', $normalized['subtotal']);
+        $this->assertSame('19', $normalized['vat_rate']);
+        $this->assertSame('234.555', $normalized['vat_amount']);
+        $this->assertSame('1469.055', $normalized['total_amount']);
+        $this->assertSame('2.000', $normalized['lines'][0]['quantity']);
+        $this->assertSame('617.250', $normalized['lines'][0]['unit_price']);
+        $this->assertSame('19', $normalized['lines'][0]['vat_rate']);
     }
 
     public function test_openrouter_extraction_error_keeps_the_raw_ocr_response_and_text_intact(): void

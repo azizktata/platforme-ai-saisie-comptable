@@ -2,7 +2,7 @@
 
 ## Source de vérité et livraison incrémentale
 
-Le cahier des charges client est documenté dans [`requirements.md`](requirements.md). Les Phases 1–5 sont implémentées au niveau applicatif : fondation multi-cabinet, référentiels comptables, intake privé, OCR, structuration, analyse comptable et validation humaine. OCR.space Free Engine 3 est le provider actif par défaut (transcription texte) ; OpenRouter `openrouter/free` structure le texte et prépare les propositions ; Mistral demeure sélectionnable pour l’extraction directement structurée. Les tests/migrations Laravel doivent être vérifiés avec PHP/Composer. L’import `.mae` et le transfert Sage réel restent différés.
+Le cahier des charges client est documenté dans [`requirements.md`](requirements.md). Les Phases 1–5 sont implémentées au niveau applicatif : fondation multi-cabinet, référentiels comptables, intake privé, OCR, structuration, analyse comptable et validation humaine. OCR.space Free Engine 3 est le provider actif par défaut (transcription texte) ; Qwen3.8 27B gratuit structure la transcription via OpenRouter avec `reasoning.effort=none` ; `openrouter/free` prépare les propositions comptables. Mistral demeure sélectionnable pour l’extraction directement structurée. Les tests/migrations Laravel doivent être vérifiés avec PHP/Composer. L’import `.mae` et le transfert Sage réel restent différés.
 
 ## Stack
 
@@ -10,7 +10,7 @@ Le cahier des charges client est documenté dans [`requirements.md`](requirement
 - Inertia.js, React 19 et TypeScript pour les pages et composants d’interface ; Tailwind CSS pour les utilitaires de présentation.
 - MySQL comme base d’exécution principale. SQLite en mémoire reste réservé aux tests automatisés.
 - Les mutations des Phases 1 et 2 sont synchrones. OCR, extraction structurée et propositions comptables des Phases 4–5 utilisent la queue Laravel `database` et un worker sur `ocr`.
-- `OcrProvider` isole l’OCR : OCR.space Free Engine 3 est actif par défaut ; Mistral reste disponible via `OCR_PROVIDER=mistral`. OpenRouter `openrouter/free` est utilisé pour structurer la transcription OCR.space et pour l’analyse comptable. Les clés API restent côté serveur.
+- `OcrProvider` isole l’OCR : OCR.space Free Engine 3 est actif par défaut ; Mistral reste disponible via `OCR_PROVIDER=mistral`. Qwen3.8 27B gratuit via OpenRouter structure le texte OCR.space, avec le raisonnement désactivé et une limite de 2 500 tokens ; Laravel normalise et valide les valeurs. `openrouter/free` reste utilisé pour l’analyse comptable. Les clés API restent côté serveur.
 - Les sources facture de la Phase 3 utilisent le disque Laravel `local` (`storage/app/private` par défaut) et ne sont accessibles qu’au travers d’une route de téléchargement authentifiée et autorisée.
 
 Le serveur Vite `preview:ui` est un aperçu autonome non persistant pour examiner le tableau de bord et les données comptables fictives. L’application Laravel utilise `resources/views/app.blade.php` et `resources/js/app.tsx`; `ToastHost` et `RequestToastEvents` sont montés dans l’entrée Inertia.
