@@ -12,6 +12,16 @@ return [
         'max_file_size_bytes' => 1024 * 1024,
         'ca_bundle' => env('OCR_SPACE_CA_BUNDLE', env('MISTRAL_CA_BUNDLE')),
     ],
+    'openrouter' => [
+        'api_key' => env('OPENROUTER_API_KEY'),
+        'endpoint' => env('OPENROUTER_ENDPOINT', 'https://openrouter.ai/api/v1/chat/completions'),
+        'model' => env('OPENROUTER_MODEL', 'openrouter/free'),
+        'timeout' => (int) env('OPENROUTER_TIMEOUT', 120),
+        'site_url' => env('OPENROUTER_SITE_URL'),
+        'app_name' => env('OPENROUTER_APP_NAME', env('APP_NAME', 'ComptaFlow')),
+        'ca_bundle' => env('OPENROUTER_CA_BUNDLE'),
+        'max_ocr_chars' => (int) env('OPENROUTER_MAX_OCR_CHARS', 100000),
+    ],
     'mistral' => [
         'api_key' => env('MISTRAL_API_KEY'),
         'base_url' => env('MISTRAL_BASE_URL', 'https://api.mistral.ai'),

@@ -47,6 +47,12 @@ class Invoice extends Model
         'description',
         'status',
         'ocr_response',
+        'ocr_text',
+        'extraction_response',
+        'extraction_model',
+        'extraction_usage',
+        'extraction_corrected_at',
+        'extraction_corrected_by',
         'ocr_data',
         'ocr_usage',
         'ocr_warnings',
@@ -81,6 +87,8 @@ class Invoice extends Model
             'withholding_amount' => 'decimal:3',
             'total_amount' => 'decimal:3',
             'ocr_response' => 'array',
+            'extraction_response' => 'array',
+            'extraction_usage' => 'array',
             'ocr_data' => 'array',
             'ocr_usage' => 'array',
             'ocr_warnings' => 'array',
@@ -90,6 +98,8 @@ class Invoice extends Model
             'ocr_failed_at' => 'datetime',
             'ocr_reviewed_at' => 'datetime',
             'ocr_reviewed_by' => 'integer',
+            'extraction_corrected_by' => 'integer',
+            'extraction_corrected_at' => 'datetime',
         ];
     }
 
@@ -113,8 +123,23 @@ class Invoice extends Model
         return $this->belongsTo(User::class, 'ocr_reviewed_by');
     }
 
+    public function extractionCorrector(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'extraction_corrected_by');
+    }
+
     public function lines(): HasMany
     {
         return $this->hasMany(InvoiceLine::class)->orderBy('line_number');
+    }
+
+    public function accountingProposal(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(AccountingProposal::class)->latestOfMany();
+    }
+
+    public function journalEntry(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(JournalEntry::class);
     }
 }

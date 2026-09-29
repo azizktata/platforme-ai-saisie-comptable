@@ -3,8 +3,12 @@
 namespace App\Jobs;
 
 use App\Contracts\OcrProvider;
+use App\Data\InvoiceOcrResult;
 use App\Exceptions\OcrProviderException;
 use App\Models\Invoice;
+use App\Services\Invoices\InvoiceDataCompletenessChecker;
+use App\Services\Invoices\InvoiceDataPersistence;
+use App\Services\Invoices\InvoiceProcessingErrorMessage;
 use App\Services\Ocr\InvoiceTotalsConsistencyChecker;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -48,30 +52,14 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
         return [30, 120];
     }
 
-    public function handle(OcrProvider $provider, InvoiceTotalsConsistencyChecker $totalsChecker): void
-    {
-        $invoice = DB::transaction(function (): ?Invoice {
-            $invoice = Invoice::query()
-                ->where('company_id', $this->companyId)
-                ->whereKey($this->invoiceId)
-                ->lockForUpdate()
-                ->first();
-
-            if ($invoice === null || ! in_array($invoice->status, ['ocr_queued', 'ocr_processing'], true)) {
-                return null;
-            }
-
-            $invoice->forceFill([
-                'status' => 'ocr_processing',
-                'ocr_attempts' => ((int) $invoice->ocr_attempts) + 1,
-                'ocr_started_at' => now(),
-                'ocr_failed_at' => null,
-                'ocr_error_code' => null,
-                'ocr_error_message' => null,
-            ])->save();
-
-            return $invoice;
-        });
+    public function handle(
+        OcrProvider $provider,
+        InvoiceDataCompletenessChecker $completenessChecker,
+        InvoiceDataPersistence $persistence,
+        InvoiceTotalsConsistencyChecker $totalsChecker,
+        InvoiceProcessingErrorMessage $errorMessages,
+    ): void {
+        $invoice = $this->claimInvoice();
 
         if ($invoice === null) {
             return;
@@ -81,7 +69,7 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
             $result = $provider->extract($invoice);
         } catch (OcrProviderException $exception) {
             if (! $exception->retryable) {
-                $this->markFailed($invoice->id, $exception->errorCode, $exception->rawResponse);
+                $this->markFailed($exception->errorCode, $exception->rawResponse, $errorMessages);
                 Log::warning('Invoice OCR stopped after a non-retryable provider error.', [
                     'invoice_id' => $invoice->id,
                     'company_id' => $invoice->company_id,
@@ -104,51 +92,28 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
             throw $exception;
         }
 
-        DB::transaction(function () use ($result, $totalsChecker): void {
-            $invoice = Invoice::query()
-                ->where('company_id', $this->companyId)
-                ->whereKey($this->invoiceId)
-                ->lockForUpdate()
-                ->first();
+        $nextStage = $this->storeOcrResult($result, $completenessChecker, $persistence, $totalsChecker);
 
-            if ($invoice === null || $invoice->status === 'ocr_completed') {
-                return;
+        if ($nextStage === 'data_extraction') {
+            try {
+                ExtractInvoiceData::dispatch($this->invoiceId, $this->companyId);
+            } catch (Throwable) {
+                $this->markDownstreamDispatchFailure('data_extraction');
             }
-
-            $invoiceData = $result->invoiceData;
-            $lines = $invoiceData['lines'];
-            unset($invoiceData['lines']);
-
-            $invoice->forceFill([
-                ...$invoiceData,
-                'ocr_response' => $result->response,
-                'ocr_data' => $result->invoiceData,
-                'ocr_usage' => $result->usage,
-                'ocr_warnings' => $totalsChecker->warnings($result->invoiceData),
-                'ocr_model' => $result->model,
-                'ocr_completed_at' => now(),
-                'ocr_failed_at' => null,
-                'ocr_error_code' => null,
-                'ocr_error_message' => null,
-                'status' => 'ocr_completed',
-            ])->save();
-
-            $invoice->lines()->delete();
-
-            foreach ($lines as $index => $line) {
-                $invoice->lines()->create([
-                    ...$line,
-                    'line_number' => $index + 1,
-                ]);
+        } elseif ($nextStage === 'accounting_analysis') {
+            try {
+                AnalyzeAccountingProposal::dispatch($this->invoiceId, $this->companyId);
+            } catch (Throwable) {
+                $this->markDownstreamDispatchFailure('accounting_analysis');
             }
-        });
+        }
     }
 
     public function failed(?Throwable $exception): void
     {
         $invoice = Invoice::query()->where('company_id', $this->companyId)->find($this->invoiceId);
 
-        if ($invoice === null || $invoice->status === 'ocr_completed') {
+        if ($invoice === null || $invoice->status !== 'ocr_processing') {
             return;
         }
 
@@ -156,7 +121,7 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
             ? $exception->errorCode
             : 'processing_attempts_exhausted';
 
-        $this->markFailed($invoice->id, $errorCode);
+        $this->markFailed($errorCode, $exception instanceof OcrProviderException ? $exception->rawResponse : null, app(InvoiceProcessingErrorMessage::class));
 
         Log::error('Invoice OCR job exhausted its attempts.', [
             'invoice_id' => $invoice->id,
@@ -166,49 +131,172 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
         ]);
     }
 
-    private function markFailed(int $invoiceId, string $errorCode, ?array $rawResponse = null): void
+    private function claimInvoice(): ?Invoice
     {
-        DB::transaction(function () use ($invoiceId, $errorCode, $rawResponse): void {
+        return DB::transaction(function (): ?Invoice {
             $invoice = Invoice::query()
                 ->where('company_id', $this->companyId)
-                ->whereKey($invoiceId)
+                ->whereKey($this->invoiceId)
                 ->lockForUpdate()
                 ->first();
 
-            if ($invoice === null || $invoice->status === 'ocr_completed') {
-                return;
+            if ($invoice === null || ! in_array($invoice->status, ['ocr_queued', 'ocr_processing'], true)) {
+                return null;
             }
 
-            $attributes = [
-                'status' => 'ocr_failed',
-                'ocr_failed_at' => now(),
-                'ocr_error_code' => $errorCode,
-                'ocr_error_message' => $this->userFacingError($errorCode),
-            ];
+            $invoice->accountingProposal()->delete();
+            $invoice->lines()->delete();
+            $invoice->forceFill([
+                'status' => 'ocr_processing',
+                'ocr_attempts' => ((int) $invoice->ocr_attempts) + 1,
+                'ocr_started_at' => now(),
+                'ocr_completed_at' => null,
+                'ocr_failed_at' => null,
+                'ocr_error_code' => null,
+                'ocr_error_message' => null,
+                'ocr_response' => null,
+                'ocr_text' => null,
+                'ocr_data' => null,
+                'ocr_usage' => null,
+                'ocr_warnings' => [],
+                'ocr_model' => null,
+                'extraction_response' => null,
+                'extraction_model' => null,
+                'extraction_usage' => null,
+                'supplier_name' => null,
+                'supplier_tax_identifier' => null,
+                'supplier_address' => null,
+                'customer_name' => null,
+                'customer_tax_identifier' => null,
+                'invoice_number' => null,
+                'purchase_order_reference' => null,
+                'invoice_date' => null,
+                'due_date' => null,
+                'currency' => null,
+                'vat_rate' => null,
+                'fodec_rate' => null,
+                'subtotal' => null,
+                'vat_amount' => null,
+                'fodec_amount' => null,
+                'other_tax_amount' => null,
+                'stamp_amount' => null,
+                'withholding_rate' => null,
+                'withholding_amount' => null,
+                'total_amount' => null,
+                'payment_terms' => null,
+                'bank_name' => null,
+                'bank_account_reference' => null,
+                'description' => null,
+            ])->save();
 
-            if ($rawResponse !== null) {
-                $attributes['ocr_response'] = $rawResponse;
-            }
-
-            $invoice->forceFill($attributes)->save();
+            return $invoice;
         });
     }
 
-    private function userFacingError(string $errorCode): string
+    private function storeOcrResult(
+        InvoiceOcrResult $result,
+        InvoiceDataCompletenessChecker $completenessChecker,
+        InvoiceDataPersistence $persistence,
+        InvoiceTotalsConsistencyChecker $totalsChecker,
+    ): ?string {
+        return DB::transaction(function () use ($result, $completenessChecker, $persistence, $totalsChecker): ?string {
+            $invoice = Invoice::query()
+                ->where('company_id', $this->companyId)
+                ->whereKey($this->invoiceId)
+                ->lockForUpdate()
+                ->first();
+
+            if ($invoice === null || $invoice->status !== 'ocr_processing') {
+                return null;
+            }
+
+            $recognizedText = is_string($result->text) ? trim($result->text) : '';
+
+            if (! $result->hasStructuredData && $recognizedText !== '') {
+                $invoice->forceFill([
+                    'ocr_response' => $result->response,
+                    'ocr_text' => $recognizedText,
+                    'ocr_usage' => $result->usage,
+                    'ocr_warnings' => [],
+                    'ocr_model' => $result->model,
+                    'ocr_completed_at' => now(),
+                    'status' => 'data_extraction',
+                ])->save();
+
+                return 'data_extraction';
+            }
+
+            $missingFields = $completenessChecker->missingFields($result->invoiceData);
+            $warnings = [
+                ...$totalsChecker->warnings($result->invoiceData),
+                ...$missingFields,
+            ];
+
+            $persistence->store($invoice, $result->invoiceData);
+            $invoice->forceFill([
+                'ocr_response' => $result->response,
+                'ocr_text' => $recognizedText === '' ? null : $recognizedText,
+                'ocr_usage' => $result->usage,
+                'ocr_warnings' => array_values(array_unique($warnings)),
+                'ocr_model' => $result->model,
+                'ocr_completed_at' => now(),
+                'ocr_failed_at' => null,
+                'ocr_error_code' => $missingFields === [] ? null : 'invoice_data_incomplete',
+                'ocr_error_message' => $missingFields === [] ? null : 'Les données obligatoires de la facture sont incomplètes. Corrigez les champs signalés avant l’analyse comptable.',
+                'status' => $missingFields === [] ? 'accounting_analysis' : 'invoice_incomplete',
+            ])->save();
+
+            return $missingFields === [] ? 'accounting_analysis' : null;
+        });
+    }
+
+    private function markFailed(string $errorCode, ?array $rawResponse, InvoiceProcessingErrorMessage $errorMessages): void
     {
-        return match ($errorCode) {
-            'configuration_missing' => 'La clé API du fournisseur OCR actif n’est pas configurée sur le serveur.',
-            'tls_ca_bundle_invalid', 'tls_certificate_verification_failed' => 'Échec de vérification TLS. Vérifiez les certificats CA de PHP ou le bundle CA du fournisseur actif.',
-            'provider_file_too_large' => 'Le fichier dépasse la limite de taille du fournisseur OCR actif. Réduisez sa taille puis relancez l’OCR.',
-            'provider_partial_result' => 'OCR.space n’a pas traité toutes les pages. Le forfait gratuit accepte au maximum trois pages PDF.',
-            'ocr_text_unavailable' => 'Aucun texte lisible n’a été détecté. Vérifiez la qualité et l’orientation du document.',
-            'provider_authentication_failed' => 'Le fournisseur OCR a refusé l’authentification. Vérifiez la configuration du serveur.',
-            'configuration_invalid' => 'La configuration du fournisseur OCR actif est invalide. Vérifiez les paramètres du serveur.',
-            'provider_rejected_request', 'invalid_provider_response', 'invalid_structured_annotation' => 'La réponse OCR n’a pas pu être validée. Le document peut être vérifié ou relancé.',
-            'source_file_missing', 'source_file_unreadable', 'source_file_invalid_path' => 'Le document privé n’a pas pu être lu pour le traitement OCR.',
-            'unsupported_document_type', 'unsupported_storage_disk' => 'Le format ou le stockage du document ne peut pas être traité par OCR.',
-            'provider_rate_limited', 'provider_unavailable', 'provider_unreachable', 'processing_attempts_exhausted' => 'Le service OCR n’a pas abouti après plusieurs tentatives. Vous pouvez relancer le traitement.',
-            default => 'Le traitement OCR a échoué. Vous pouvez relancer le traitement.',
-        };
+        DB::transaction(function () use ($errorCode, $rawResponse, $errorMessages): void {
+            $invoice = Invoice::query()
+                ->where('company_id', $this->companyId)
+                ->whereKey($this->invoiceId)
+                ->lockForUpdate()
+                ->first();
+
+            if ($invoice === null || $invoice->status !== 'ocr_processing') {
+                return;
+            }
+
+            $invoice->forceFill([
+                'status' => 'ocr_failed',
+                'ocr_failed_at' => now(),
+                'ocr_error_code' => $errorCode,
+                'ocr_error_message' => $errorMessages->for($errorCode),
+                ...($rawResponse === null ? [] : ['ocr_response' => $rawResponse]),
+            ])->save();
+        });
+    }
+
+    private function markDownstreamDispatchFailure(string $stage): void
+    {
+        $status = $stage === 'data_extraction' ? 'data_extraction_failed' : 'accounting_analysis_failed';
+        $message = $stage === 'data_extraction'
+            ? 'L’étape d’extraction des données n’a pas pu être planifiée. Vous pouvez la relancer.'
+            : 'L’analyse comptable n’a pas pu être planifiée. Vous pouvez la relancer.';
+
+        DB::transaction(function () use ($stage, $status, $message): void {
+            $invoice = Invoice::query()
+                ->where('company_id', $this->companyId)
+                ->whereKey($this->invoiceId)
+                ->lockForUpdate()
+                ->first();
+
+            if ($invoice === null || $invoice->status !== $stage) {
+                return;
+            }
+
+            $invoice->forceFill([
+                'status' => $status,
+                'ocr_failed_at' => now(),
+                'ocr_error_code' => 'queue_unavailable',
+                'ocr_error_message' => $message,
+            ])->save();
+        });
     }
 }

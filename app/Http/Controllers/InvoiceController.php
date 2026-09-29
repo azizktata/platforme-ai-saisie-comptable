@@ -4,12 +4,19 @@ namespace App\Http\Controllers;
 
 use App\Exceptions\OcrProviderException;
 use App\Http\Requests\BulkReviewInvoicesRequest;
+use App\Http\Requests\SaveInvoiceExtractionRequest;
 use App\Http\Requests\UploadInvoiceFileRequest;
+use App\Jobs\AnalyzeAccountingProposal;
+use App\Jobs\ExtractInvoiceData;
 use App\Jobs\ProcessInvoiceOcr;
 use App\Models\Company;
 use App\Models\Invoice;
 use App\Models\User;
+use App\Services\Invoices\InvoiceDataCompletenessChecker;
+use App\Services\Invoices\InvoiceDataPersistence;
 use App\Services\Invoices\StoreInvoiceUpload;
+use App\Services\Ocr\InvoiceOcrSchema;
+use App\Services\Ocr\InvoiceTotalsConsistencyChecker;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -23,6 +30,7 @@ use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
+use InvalidArgumentException;
 
 class InvoiceController extends Controller
 {
@@ -169,56 +177,206 @@ class InvoiceController extends Controller
         $this->authorize('manageInvoices', $company);
         abort_unless((int) $invoice->company_id === (int) $company->id, 404);
 
-        $canRetry = DB::transaction(function () use ($company, $invoice): bool {
+        $stage = DB::transaction(function () use ($company, $invoice): ?string {
             $lockedInvoice = Invoice::query()
                 ->where('company_id', $company->id)
                 ->whereKey($invoice->id)
                 ->lockForUpdate()
                 ->first();
 
-            if ($lockedInvoice === null || ! in_array($lockedInvoice->status, ['uploaded', 'ocr_failed'], true)) {
-                return false;
+            if ($lockedInvoice === null) {
+                return null;
+            }
+
+            $stage = match ($lockedInvoice->status) {
+                'uploaded', 'ocr_failed' => 'ocr',
+                'data_extraction_failed' => 'data_extraction',
+                'accounting_analysis_failed' => 'accounting_analysis',
+                default => null,
+            };
+
+            if ($stage === null) {
+                return null;
             }
 
             $lockedInvoice->forceFill([
-                'status' => 'ocr_queued',
+                'status' => match ($stage) {
+                    'ocr' => 'ocr_queued',
+                    'data_extraction' => 'data_extraction',
+                    default => 'accounting_analysis',
+                },
                 'ocr_failed_at' => null,
                 'ocr_error_code' => null,
                 'ocr_error_message' => null,
             ])->save();
 
-            return true;
+            return $stage;
         });
 
-        if (! $canRetry) {
-            return back()->withErrors(['ocr' => 'Seules les factures importées sans OCR ou en échec peuvent être traitées.']);
+        if ($stage === null) {
+            return back()->withErrors(['processing' => 'Aucune étape échouée ne peut être relancée pour cette facture.']);
         }
 
         try {
-            ProcessInvoiceOcr::dispatch($invoice->id, $company->id);
-        } catch (OcrProviderException $exception) {
-            $invoice->refresh();
-            Log::warning('Invoice OCR retry failed during synchronous queue execution.', [
-                'invoice_id' => $invoice->id,
-                'company_id' => $company->id,
-                'error_code' => $exception->errorCode,
-                'transport_error' => $exception->diagnostic,
-            ]);
-
-            return back()->withErrors(['ocr' => $invoice->ocr_error_message ?? 'Le service OCR n’est pas joignable. Vérifiez la configuration réseau du serveur.']);
+            match ($stage) {
+                'ocr' => ProcessInvoiceOcr::dispatch($invoice->id, $company->id),
+                'data_extraction' => ExtractInvoiceData::dispatch($invoice->id, $company->id),
+                default => AnalyzeAccountingProposal::dispatch($invoice->id, $company->id),
+            };
         } catch (\Throwable) {
-            $invoice->refresh();
-            $this->markOcrQueueFailure($invoice);
+            $this->markStageQueueFailure($company, $invoice, $stage);
 
-            Log::warning('Invoice OCR retry job could not be dispatched.', [
-                'invoice_id' => $invoice->id,
-                'company_id' => $company->id,
-            ]);
-
-            return back()->withErrors(['ocr' => 'La relance OCR n’a pas pu être planifiée. Réessayez plus tard.']);
+            return back()->withErrors(['processing' => 'La relance du traitement n’a pas pu être planifiée. Réessayez plus tard.']);
         }
 
-        return to_route('invoices.index', ['company_id' => $company->id]);
+        return to_route('invoices.index', ['company_id' => $company->id])
+            ->with('success', 'L’étape du traitement a été relancée.');
+    }
+
+    public function details(Company $company, Invoice $invoice, InvoiceOcrSchema $schema): JsonResponse
+    {
+        $this->authorize('view', $company);
+        abort_unless((int) $invoice->company_id === (int) $company->id, 404);
+
+        $invoice->load(['lines', 'accountingProposal.lines.chartAccount', 'accountingProposal.lines.thirdParty', 'accountingProposal.lines.analyticalAccount', 'accountingProposal.journal', 'accountingProposal.journalEntry']);
+        $invoiceData = $this->currentInvoiceData($invoice, $schema);
+        $proposal = $invoice->accountingProposal;
+        $user = request()->user();
+
+        return response()->json([
+            'invoice' => [
+                'id' => $invoice->id,
+                'status' => $invoice->status,
+                'original_filename' => $invoice->original_filename,
+                'ocr_text' => $invoice->ocr_text ?? ($invoice->extraction_model === null && str_starts_with((string) $invoice->ocr_model, 'ocr.space-engine-') ? $invoice->description : null),
+                'ocr_data' => $invoiceData,
+                'ocr_warnings' => $invoice->ocr_warnings ?? [],
+                'ocr_error_message' => $invoice->ocr_error_message,
+                'ocr_model' => $invoice->ocr_model,
+                'extraction_model' => $invoice->extraction_model,
+                'extraction_corrected_at' => $invoice->extraction_corrected_at?->toIso8601String(),
+            ],
+            'proposal' => $proposal === null ? null : [
+                'id' => $proposal->id,
+                'status' => $proposal->status,
+                'journal_id' => $proposal->journal_id,
+                'journal_code' => $proposal->journal?->code,
+                'journal_label' => $proposal->journal?->label,
+                'entry_description' => $proposal->entry_description,
+                'explanation' => $proposal->explanation,
+                'warnings' => $proposal->warnings ?? [],
+                'model' => $proposal->model,
+                'modified_at' => $proposal->modified_at?->toIso8601String(),
+                'journal_entry_id' => $proposal->journal_entry_id,
+                'lines' => $proposal->lines->map(fn ($line): array => [
+                    'id' => $line->id,
+                    'chart_account_id' => $line->chart_account_id,
+                    'chart_account_code' => $line->chartAccount?->code,
+                    'chart_account_label' => $line->chartAccount?->label,
+                    'third_party_id' => $line->third_party_id,
+                    'third_party_code' => $line->thirdParty?->code,
+                    'third_party_name' => $line->thirdParty?->name,
+                    'analytical_account_id' => $line->analytical_account_id,
+                    'analytical_account_code' => $line->analyticalAccount?->code,
+                    'analytical_account_label' => $line->analyticalAccount?->label,
+                    'description' => $line->description,
+                    'debit' => $line->debit,
+                    'credit' => $line->credit,
+                    'confidence' => $line->confidence,
+                ])->values()->all(),
+            ],
+            'options' => [
+                'chart_accounts' => $company->chartAccounts()->where('is_active', true)->orderBy('code')->get(['id', 'code', 'label', 'account_type'])->toArray(),
+                'journals' => $company->journals()->where('is_active', true)->orderBy('code')->get(['id', 'code', 'label', 'journal_type'])->toArray(),
+                'third_parties' => $company->thirdParties()->where('is_active', true)->whereIn('party_type', ['supplier', 'both'])->orderBy('code')->get(['id', 'code', 'name'])->toArray(),
+                'analytical_accounts' => $company->analyticalAccounts()->where('is_active', true)->orderBy('code')->get(['id', 'code', 'label'])->toArray(),
+            ],
+            'can_manage' => $user?->can('manageInvoices', $company) === true,
+        ])->header('Cache-Control', 'private, no-store');
+    }
+
+    public function saveExtraction(
+        SaveInvoiceExtractionRequest $request,
+        Company $company,
+        Invoice $invoice,
+        InvoiceOcrSchema $schema,
+        InvoiceDataCompletenessChecker $completenessChecker,
+        InvoiceDataPersistence $persistence,
+        InvoiceTotalsConsistencyChecker $totalsChecker,
+    ): RedirectResponse {
+        $this->authorize('manageInvoices', $company);
+        abort_unless((int) $invoice->company_id === (int) $company->id, 404);
+
+        try {
+            $invoiceData = $schema->validate($request->validated('invoice_data'));
+        } catch (InvalidArgumentException) {
+            throw ValidationException::withMessages([
+                'invoice_data' => 'Les champs de facture ne respectent pas le format attendu. Vérifiez les dates, les montants et les lignes.',
+            ]);
+        }
+
+        $missingFields = $completenessChecker->missingFields($invoiceData);
+        $warnings = array_values(array_unique([
+            ...$totalsChecker->warnings($invoiceData),
+            ...$missingFields,
+        ]));
+        $reviewer = $request->user();
+
+        DB::transaction(function () use ($company, $invoice, $invoiceData, $missingFields, $warnings, $persistence, $reviewer): void {
+            $lockedInvoice = $company->invoices()->whereKey($invoice->id)->lockForUpdate()->firstOrFail();
+
+            if (! in_array($lockedInvoice->status, [
+                'invoice_incomplete',
+                'data_extraction_failed',
+                'accounting_analysis_failed',
+                'proposal_ready',
+                'proposal_rejected',
+            ], true) || $lockedInvoice->journalEntry()->exists()) {
+                throw ValidationException::withMessages([
+                    'invoice_data' => 'Les données de cette facture ne peuvent plus être modifiées à cette étape.',
+                ]);
+            }
+
+            $proposal = $lockedInvoice->accountingProposal;
+
+            if ($proposal !== null) {
+                if ($proposal->status === 'approved' || $proposal->journal_entry_id !== null) {
+                    throw ValidationException::withMessages([
+                        'invoice_data' => 'Une proposition validée ne peut plus être modifiée.',
+                    ]);
+                }
+
+                if ($proposal->status === 'ready') {
+                    $proposal->forceFill(['status' => 'superseded'])->save();
+                }
+            }
+
+            $persistence->store($lockedInvoice, $invoiceData);
+            $lockedInvoice->forceFill([
+                'ocr_warnings' => $warnings,
+                'extraction_corrected_at' => now(),
+                'extraction_corrected_by' => $reviewer->id,
+                'ocr_error_code' => $missingFields === [] ? null : 'invoice_data_incomplete',
+                'ocr_error_message' => $missingFields === []
+                    ? null
+                    : 'Les données obligatoires de la facture sont incomplètes. Corrigez les champs signalés avant l’analyse comptable.',
+                'status' => $missingFields === [] ? 'accounting_analysis' : 'invoice_incomplete',
+            ])->save();
+        });
+
+        if ($missingFields === []) {
+            try {
+                AnalyzeAccountingProposal::dispatch($invoice->id, $company->id);
+            } catch (\Throwable) {
+                $this->markStageQueueFailure($company, $invoice, 'accounting_analysis');
+
+                return back()->withErrors(['processing' => 'Les données sont enregistrées, mais l’analyse comptable n’a pas pu être planifiée. Vous pouvez la relancer.']);
+            }
+
+            return back()->with('success', 'Les données sont enregistrées. L’analyse comptable démarre automatiquement.');
+        }
+
+        return back()->with('success', 'Les corrections sont enregistrées. Complétez les champs obligatoires avant l’analyse comptable.');
     }
 
     public function bulkReview(BulkReviewInvoicesRequest $request, Company $company): RedirectResponse
@@ -353,23 +511,90 @@ class InvoiceController extends Controller
 
     private function markOcrQueueFailure(Invoice $invoice): void
     {
-        DB::transaction(function () use ($invoice): void {
+        $this->markStageQueueFailure($invoice->company, $invoice, 'ocr');
+    }
+
+    private function markStageQueueFailure(Company $company, Invoice $invoice, string $stage): void
+    {
+        $status = match ($stage) {
+            'data_extraction' => 'data_extraction_failed',
+            'accounting_analysis' => 'accounting_analysis_failed',
+            default => 'ocr_failed',
+        };
+        $message = match ($stage) {
+            'data_extraction' => 'L’extraction des données n’a pas pu être planifiée. Vous pouvez la relancer.',
+            'accounting_analysis' => 'L’analyse comptable n’a pas pu être planifiée. Vous pouvez la relancer.',
+            default => 'Le traitement OCR n’a pas pu être planifié. Vous pouvez le relancer.',
+        };
+
+        DB::transaction(function () use ($company, $invoice, $stage, $status, $message): void {
             $lockedInvoice = Invoice::query()
-                ->where('company_id', $invoice->company_id)
+                ->where('company_id', $company->id)
                 ->whereKey($invoice->id)
                 ->lockForUpdate()
                 ->first();
 
-            if ($lockedInvoice === null || $lockedInvoice->status === 'ocr_completed') {
+            $expectedStatus = match ($stage) {
+                'data_extraction' => 'data_extraction',
+                'accounting_analysis' => 'accounting_analysis',
+                default => 'ocr_queued',
+            };
+
+            if ($lockedInvoice === null || $lockedInvoice->status !== $expectedStatus) {
                 return;
             }
 
             $lockedInvoice->forceFill([
-                'status' => 'ocr_failed',
+                'status' => $status,
                 'ocr_failed_at' => now(),
                 'ocr_error_code' => 'queue_unavailable',
-                'ocr_error_message' => 'Le traitement OCR n’a pas pu être planifié. Vous pouvez relancer le traitement.',
+                'ocr_error_message' => $message,
             ])->save();
         });
+    }
+
+    /** @return array<string, mixed> */
+    private function currentInvoiceData(Invoice $invoice, InvoiceOcrSchema $schema): array
+    {
+        if (is_array($invoice->ocr_data) && isset($invoice->ocr_data['lines']) && is_array($invoice->ocr_data['lines'])) {
+            return $invoice->ocr_data;
+        }
+
+        $data = $schema->emptyAnnotation();
+
+        foreach (array_keys($data) as $field) {
+            if ($field === 'lines') {
+                continue;
+            }
+
+            $value = $invoice->getAttribute($field);
+
+            if ($value instanceof \DateTimeInterface) {
+                $value = $value->format('Y-m-d');
+            } elseif ($value !== null && in_array($field, [
+                'vat_rate', 'fodec_rate', 'subtotal', 'vat_amount', 'fodec_amount',
+                'other_tax_amount', 'stamp_amount', 'withholding_rate', 'withholding_amount', 'total_amount',
+            ], true)) {
+                $value = (string) $value;
+            }
+
+            $data[$field] = $value;
+        }
+
+        $data['lines'] = $invoice->lines->map(fn ($line): array => [
+            'reference' => $line->reference,
+            'description' => $line->description,
+            'quantity' => $line->quantity,
+            'unit_price' => $line->unit_price,
+            'subtotal' => $line->subtotal,
+            'vat_rate' => $line->vat_rate,
+            'vat_amount' => $line->vat_amount,
+            'fodec_rate' => $line->fodec_rate,
+            'fodec_amount' => $line->fodec_amount,
+            'other_tax_amount' => $line->other_tax_amount,
+            'total_amount' => $line->total_amount,
+        ])->values()->all();
+
+        return $data;
     }
 }

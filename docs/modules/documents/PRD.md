@@ -1,45 +1,26 @@
-# PRD — Intake et extraction des factures (Phases 3–4)
+# PRD — Documents facture et workflow IA (Phases 3–5)
 
 ## Objectif
 
-Permettre aux membres autorisés d’importer des factures dans une société, de conserver l’original en privé, puis de lancer automatiquement une extraction OCR indépendante par document. Les champs, lignes et contrôles de cohérence doivent être traçables ; aucune proposition ni écriture comptable n’est créée à cette étape.
+Importer des factures fournisseur de façon sécurisée, suivre chaque étape de traitement et exposer un résultat compréhensible/auditable aux utilisateurs autorisés. Le flux OCR → extraction → proposition comptable est distinct de toute validation finale.
 
-## Phase 3 — Intake livré
+## Comportement livré
 
-- **Schéma :** `invoices` et `invoice_lines`, reliés aux sociétés, tiers éventuels, utilisateurs importateurs et facture parente. `third_party_id` reste nullable avant tout rapprochement.
-- **Espaces :** le lien fixe « Factures » ouvre `/invoices`, un workspace qui présélectionne la première société accessible triée par nom ; le sélecteur est limité aux accès de l’utilisateur. `/companies/{company}/invoices` reste disponible comme historique complet société.
-- **Formats :** PDF, JPG, JPEG et PNG contrôlés côté serveur ; limite dynamique du fournisseur actif (1 Mo pour OCR.space Free, 20 Mo pour Mistral) et 300 fichiers par sélection UI.
-- **Traitement indépendant :** un fichier par requête et opération de stockage ; une erreur n’annule pas les fichiers acceptés et ne bloque pas les suivants.
-- **Stockage privé :** disque Laravel `local`, chemin propre à la société, pas de chemin privé dans les props Inertia. Le téléchargement est authentifié et limité à la société concernée.
-- **Autorisations :** administrateurs de cabinet et gestionnaires affectés peuvent importer ; les autres membres autorisés peuvent consulter et télécharger.
-- **Doublons :** comparaison SHA-256 par société, sous verrou pour les requêtes concurrentes. Un doublon retourne `409` et ne persiste qu’après confirmation (`confirm_duplicate`). Aucun conflit inter-sociétés.
+- Import privé de PDF/JPG/JPEG/PNG, validation côté serveur, empreinte SHA-256 par société et confirmation explicite des doublons.
+- OCR.space Engine 3 Free est le défaut et renvoie la transcription textuelle, affichée dans une boîte de dialogue dédiée. Mistral demeure sélectionnable et fournit directement les champs structurés.
+- Pour OCR.space, OpenRouter `openrouter/free` structure le texte en JSON strict conforme au contrat facture. OCR brut, texte, JSON extrait et réponse OpenRouter sont conservés séparément.
+- Les informations obligatoires sont contrôlées ; en cas de donnée manquante, l’analyse comptable est bloquée et un gestionnaire peut corriger les champs.
+- Après complétude, OpenRouter établit une proposition en se limitant aux référentiels et à l’historique de la société. L’utilisateur voit les avertissements et peut corriger, rejeter ou explicitement valider.
+- Aucune écriture finale n’est créée avant validation humaine. L’écriture approuvée est liée à la facture, scoped au journal et aux comptes de la société.
 
-## Phase 4 — OCR livré
+## États visibles
 
-- Un upload enregistré passe à `ocr_queued` puis planifie un job indépendant sur la file `ocr`. `ProcessInvoiceOcr` est idempotent par société/facture.
-- Le contrat `OcrProvider` permet de choisir OCR.space Free Engine 3 (par défaut) ou `MistralOcrProvider` (`OCR_PROVIDER=mistral`). OCR.space transmet le fichier en multipart, avec la clé en header et `OCREngine=3`, puis conserve le texte reconnu sans inventer de champs. Mistral utilise `/v1/ocr` avec un schéma strict d’annotation JSON.
-- Les données structurées fournies et `invoice_lines` sont persistés dans une transaction. Le texte OCR.space apparaît dans la description consultable ; sa réponse brute, le JSON validé quand fourni, le modèle, l’usage, les tentatives et horodatages sont conservés.
-- Les états visibles sont `ocr_queued`, `ocr_processing`, `ocr_completed` et `ocr_failed`. Les erreurs temporaires sont réessayées ; les échecs exposent un message sûr et les gestionnaires peuvent relancer. Les factures `uploaded` du prototype Phase 3 peuvent être mises en file manuellement.
-- Les totaux ne sont pas corrigés : la formule HT + TVA + FODEC + autres taxes + timbre − retenue est contrôlée seulement si ses sept montants sont extraits. L’interface signale un désaccord ou l’impossibilité de conclure si une composante manque.
-- L’interface actualise les factures en cours et affiche état, erreurs et avertissements. Toute extraction reste à vérifier par un humain.
+`ocr_queued`, `ocr_processing`, `data_extraction`, `invoice_incomplete`, `accounting_analysis`, `proposal_ready`, `proposal_rejected`, `accounting_validated`; les erreurs gardent une étape dédiée et une relance ciblée. Le workspace actualise la progression des jobs toutes les cinq secondes.
 
-## Workspace et revue de l’extraction
+## Sécurité
 
-- L’espace global préselectionne la première société accessible par ordre alphabétique, propose un import et une liste récente ; les rôles sont revérifiés côté serveur.
-- Les factures sélectionnées sur la page courante peuvent être exportées en CSV.
-- Un gestionnaire peut marquer comme vérifiées uniquement des extractions OCR terminées. Le statut/horodatage et l’utilisateur vérificateur sont conservés pour la traçabilité ; cette action ne valide pas une écriture.
+Les originaux restent sur le disque privé. Le téléchargement, la transcription et la proposition sont protégés par l’accès société. Les comptes, journaux, tiers et axes choisis sont revalidés côté serveur. Les clés OpenRouter/OCR ne quittent jamais le serveur ; les corps de requête ne sont pas journalisés.
 
-## Hors périmètre
+## Limites
 
-- Aucun appel Mistral Small, analyse du contexte comptable, rapprochement fournisseur, compte/journal proposé, écriture, export Sage ou validation comptable (Phase 5 / intégration future).
-- Aucun déplacement ni suppression des anciennes tables `documents` et `accounting_entries` ; aucune donnée historique n’est migrée implicitement.
-
-## Critères d’acceptation
-
-1. Un gestionnaire autorisé peut importer et retrouver ses factures ; les fichiers restent privés et les downloads respectent le périmètre société.
-2. Chaque import accepté est mis en file automatiquement et indépendamment ; un doublon nécessite une confirmation explicite.
-3. Les réponses OCR valides sont persistées avec leurs lignes et éléments d’audit ; une réponse invalide devient une erreur visible, pas une extraction partielle.
-4. L’état, les tentatives, erreurs et avertissements de totaux sont visibles et récupérables.
-5. Les montants extraits ne sont jamais silencieusement recalculés/corrigés et aucune écriture comptable n’est créée.
-6. Les tests utilisent des réponses HTTP simulées et ne nécessitent pas de clé fournisseur réelle.
-7. OCR.space Engine 3 utilise le endpoint POST multipart avec la clé API dans le header ; la transcription brute est visible sans créer de valeurs facture inventées. La première société accessible est présélectionnée.
+OCR.space Free limite les fichiers à 1 Mo et les PDF à trois pages. Le routeur gratuit OpenRouter et les modèles disponibles peuvent varier. L’import Sage, l’export et l’apprentissage des corrections sont différés. Voir `docs/modules/invoice-processing/PRD.md` et `docs/modules/accounting-proposals/PRD.md` pour le workflow détaillé.

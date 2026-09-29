@@ -18,6 +18,7 @@ class JournalEntry extends Model
         'entry_date',
         'description',
         'source',
+        'invoice_id',
     ];
 
     protected function casts(): array
@@ -25,6 +26,7 @@ class JournalEntry extends Model
         return [
             'company_id' => 'integer',
             'journal_id' => 'integer',
+            'invoice_id' => 'integer',
             'entry_date' => 'date',
         ];
     }
@@ -37,6 +39,11 @@ class JournalEntry extends Model
     public function journal(): BelongsTo
     {
         return $this->belongsTo(Journal::class);
+    }
+
+    public function invoice(): BelongsTo
+    {
+        return $this->belongsTo(Invoice::class);
     }
 
     public function lines(): HasMany

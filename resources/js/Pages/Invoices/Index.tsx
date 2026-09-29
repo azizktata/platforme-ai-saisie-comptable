@@ -3,6 +3,7 @@ import { ArrowDownToLine, FileText, LoaderCircle, RotateCcw, Upload, X } from 'l
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import AppShell from '../../Components/AppShell';
+import InvoiceReviewDialog from '../../Components/InvoiceReviewDialog';
 import type { SharedAuthProps } from '../../types';
 
 type InvoiceSummary = {
@@ -68,8 +69,9 @@ export default function InvoicesIndex({ mode, ocrProvider, maxUploadFileSizeByte
   const [confirmDuplicates, setConfirmDuplicates] = useState(false);
   const [uploadFailures, setUploadFailures] = useState<InvoiceUploadFailure[]>([]);
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<number[]>([]);
+  const [reviewingInvoice, setReviewingInvoice] = useState<{ id: number; tab: 'ocr' | 'invoice' | 'proposal' } | null>(null);
   const invoiceRows = invoices?.data ?? [];
-  const hasPendingOcr = invoiceRows.some((invoice) => ['ocr_queued', 'ocr_processing'].includes(invoice.status));
+  const hasPendingOcr = invoiceRows.some((invoice) => ['ocr_queued', 'ocr_processing', 'data_extraction', 'accounting_analysis'].includes(invoice.status));
   const reviewableSelectedIds = invoiceRows
     .filter((invoice) => selectedInvoiceIds.includes(invoice.id) && invoice.status === 'ocr_completed' && !invoice.ocr_reviewed_at)
     .map((invoice) => invoice.id);
@@ -101,8 +103,8 @@ export default function InvoicesIndex({ mode, ocrProvider, maxUploadFileSizeByte
 
     router.post(`/companies/${company.id}/invoices/${invoiceId}/ocr/retry`, {}, {
       preserveScroll: true,
-      onSuccess: () => toast.success('Relance OCR planifiée.'),
-      onError: () => toast.error('La relance OCR n’a pas pu être planifiée.'),
+      onSuccess: () => toast.success('L’étape de traitement a été relancée.'),
+      onError: () => toast.error('La relance du traitement n’a pas pu être planifiée.'),
     });
   };
 
@@ -270,10 +272,10 @@ export default function InvoicesIndex({ mode, ocrProvider, maxUploadFileSizeByte
             <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">{mode === 'history' ? 'Historique des factures' : 'Factures'}</h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
               {mode === 'history'
-                ? 'Consultez les documents déposés pour cette société, leur état OCR et les résultats de vérification.'
+                ? 'Consultez les documents, les données extraites et les propositions comptables préparées pour cette société.'
                 : ocrProvider === 'ocr_space'
-                  ? 'La première société accessible est sélectionnée automatiquement. OCR.space Engine 3 retranscrit le texte ; les champs fournisseur, date et montants ne sont pas structurés automatiquement.'
-                  : 'La première société accessible est sélectionnée automatiquement. Chaque fichier est traité séparément par Mistral OCR.'}
+                  ? 'La première société accessible est sélectionnée automatiquement. OCR.space Engine 3 retranscrit le document, puis OpenRouter structure la facture et prépare une proposition comptable à vérifier.'
+                  : 'La première société accessible est sélectionnée automatiquement. Mistral OCR structure la facture, puis OpenRouter prépare une proposition comptable à vérifier.'}
             </p>
           </div>
           {mode === 'workspace' ? (
@@ -368,7 +370,7 @@ export default function InvoicesIndex({ mode, ocrProvider, maxUploadFileSizeByte
             </button>
 
             <p className="mt-3 text-xs leading-5 text-slate-500">
-              Les originaux restent dans le stockage privé. {ocrProvider === 'ocr_space' ? 'OCR.space transcrit le texte sans remplir automatiquement les champs structurés ; ouvrez « Afficher le texte OCR » pour le vérifier.' : 'Mistral extrait des champs et des montants qui doivent toujours être vérifiés.'} Aucune proposition comptable n’est générée à cette phase.
+              Les documents et leurs réponses IA restent associés à leur société. Les données extraites et la proposition doivent être vérifiées ; aucune écriture n’est créée avant une validation humaine explicite.
             </p>
           </section>
         ) : mode === 'workspace' && company ? (
@@ -446,13 +448,10 @@ export default function InvoicesIndex({ mode, ocrProvider, maxUploadFileSizeByte
                       <td className="min-w-56 px-5 py-3">
                         <span className="block max-w-72 truncate font-medium text-slate-800" title={invoice.original_filename}>{invoice.original_filename}</span>
                         <span className="mt-0.5 block text-xs text-slate-400">{formatFileSize(invoice.size_bytes)} · {formatTimestamp(invoice.created_at)}</span>
-                        {invoice.status === 'ocr_completed' && invoice.description && (
-                          <details className="mt-1 max-w-72 text-xs">
-                            <summary className="cursor-pointer font-medium text-teal-700 hover:text-teal-900">
-                              {ocrProvider === 'ocr_space' ? 'Afficher le texte OCR' : 'Afficher la description'}
-                            </summary>
-                            <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-50 p-3 font-sans leading-5 text-slate-700">{invoice.description}</pre>
-                          </details>
+                        {!['uploaded', 'ocr_queued', 'ocr_processing'].includes(invoice.status) && (
+                          <button type="button" onClick={() => setReviewingInvoice({ id: invoice.id, tab: 'ocr' })} className="mt-1 text-left text-xs font-semibold text-teal-700 hover:text-teal-900">
+                            Afficher le texte OCR
+                          </button>
                         )}
                       </td>
                       <td className="px-5 py-3 text-slate-600">
@@ -463,9 +462,9 @@ export default function InvoicesIndex({ mode, ocrProvider, maxUploadFileSizeByte
                       <td className="whitespace-nowrap px-5 py-3 text-right tabular-nums text-slate-700">{formatAmount(invoice.total_amount, invoice.currency || company.currency || 'TND')}</td>
                       <td className="min-w-40 px-5 py-3">
                         <StatusBadge status={invoice.status} reviewedAt={invoice.ocr_reviewed_at} />
-                        {invoice.status === 'ocr_failed' && (
+                        {['ocr_failed', 'data_extraction_failed', 'accounting_analysis_failed'].includes(invoice.status) && (
                           <p className="mt-1 max-w-64 text-xs leading-4 text-red-700">
-                            {invoice.ocr_error_message || 'Le traitement OCR a échoué.'}
+                            {invoice.ocr_error_message || 'Le traitement de cette facture a échoué.'}
                             {invoice.ocr_attempts > 0 && <span className="block text-red-600">Tentatives : {invoice.ocr_attempts}</span>}
                           </p>
                         )}
@@ -478,13 +477,23 @@ export default function InvoicesIndex({ mode, ocrProvider, maxUploadFileSizeByte
                       </td>
                       <td className="min-w-52 px-5 py-3 text-right">
                         <div className="flex flex-wrap justify-end gap-2">
-                          {canUploadInvoices && ['uploaded', 'ocr_failed'].includes(invoice.status) && (
+                          {canUploadInvoices && ['uploaded', 'ocr_failed', 'data_extraction_failed', 'accounting_analysis_failed'].includes(invoice.status) && (
                             <button
                               type="button"
                               onClick={() => retryOcr(invoice.id)}
                               className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 px-2.5 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-50"
                             >
-                              <RotateCcw size={14} /> {invoice.status === 'uploaded' ? 'Démarrer OCR' : 'Relancer OCR'}
+                              <RotateCcw size={14} /> {retryLabel(invoice.status)}
+                            </button>
+                          )}
+                          {canUploadInvoices && ['invoice_incomplete', 'data_extraction_failed', 'accounting_analysis_failed', 'proposal_rejected'].includes(invoice.status) && (
+                            <button type="button" onClick={() => setReviewingInvoice({ id: invoice.id, tab: 'invoice' })} className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 px-2.5 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-50">
+                              <FileText size={14} /> Corriger les données
+                            </button>
+                          )}
+                          {canUploadInvoices && invoice.status === 'proposal_ready' && (
+                            <button type="button" onClick={() => setReviewingInvoice({ id: invoice.id, tab: 'proposal' })} className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300 px-2.5 py-1.5 text-xs font-semibold text-emerald-900 hover:bg-emerald-50">
+                              <FileText size={14} /> Vérifier la proposition
                             </button>
                           )}
                           <a href={invoice.download_url} className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-teal-800 hover:border-teal-300 hover:bg-teal-50">
@@ -509,6 +518,15 @@ export default function InvoicesIndex({ mode, ocrProvider, maxUploadFileSizeByte
           </section>
         )}
       </section>
+      {company && reviewingInvoice && (
+        <InvoiceReviewDialog
+          companyId={company.id}
+          invoiceId={reviewingInvoice.id}
+          initialTab={reviewingInvoice.tab}
+          onClose={() => setReviewingInvoice(null)}
+          onChanged={() => router.reload({ only: ['invoices'] })}
+        />
+      )}
     </AppShell>
   );
 }
@@ -518,17 +536,29 @@ function StatusBadge({ status, reviewedAt }: { status: string; reviewedAt: strin
     uploaded: 'Importée · en attente OCR',
     ocr_queued: 'OCR en attente',
     ocr_processing: 'OCR en cours',
+    data_extraction: 'Structuration des champs',
+    invoice_incomplete: 'Informations à compléter',
+    accounting_analysis: 'Analyse comptable en cours',
+    proposal_ready: 'Proposition disponible',
+    accounting_validated: 'Écriture comptable validée',
+    proposal_rejected: 'Proposition rejetée',
     ocr_completed: 'OCR terminé · à vérifier',
     ocr_failed: 'Échec OCR',
+    data_extraction_failed: 'Échec extraction',
+    accounting_analysis_failed: 'Échec analyse comptable',
   };
-  const tone = status === 'ocr_completed'
+  const isFailed = ['ocr_failed', 'data_extraction_failed', 'accounting_analysis_failed'].includes(status);
+  const isComplete = ['proposal_ready', 'accounting_validated', 'ocr_completed'].includes(status);
+  const isPending = ['ocr_queued', 'ocr_processing', 'data_extraction', 'accounting_analysis'].includes(status);
+  const tone = isComplete
     ? 'bg-emerald-50 text-emerald-800'
-    : status === 'ocr_failed'
+    : isFailed
       ? 'bg-red-50 text-red-800'
-      : status === 'ocr_queued' || status === 'ocr_processing'
+      : status === 'invoice_incomplete'
         ? 'bg-amber-50 text-amber-900'
-        : 'bg-sky-50 text-sky-800';
-  const isPending = status === 'ocr_queued' || status === 'ocr_processing';
+        : isPending
+          ? 'bg-amber-50 text-amber-900'
+          : 'bg-sky-50 text-sky-800';
 
   return (
     <div>
@@ -539,6 +569,13 @@ function StatusBadge({ status, reviewedAt }: { status: string; reviewedAt: strin
       {reviewedAt && <span className="mt-1 block text-xs text-emerald-700">Vérifiée le {formatTimestamp(reviewedAt)}</span>}
     </div>
   );
+}
+
+function retryLabel(status: string): string {
+  if (status === 'uploaded') return 'Démarrer OCR';
+  if (status === 'data_extraction_failed') return 'Relancer extraction';
+  if (status === 'accounting_analysis_failed') return 'Relancer analyse';
+  return 'Relancer OCR';
 }
 
 function Paginator({ page }: { page: Paginator<InvoiceSummary> }) {

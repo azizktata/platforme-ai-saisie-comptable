@@ -1,31 +1,23 @@
 # Plateforme AI de saisie comptable automatisée
 
-Application de traitement comptable des factures fournisseurs, destinée aux cabinets gérant plusieurs sociétés. Le cahier des charges et le prompt technique du client sont la source de vérité : [`docs/requirements.md`](docs/requirements.md). La mise en œuvre suit les phases indiquées dans ce document.
+Application de traitement de factures fournisseurs pour cabinets gérant plusieurs sociétés. Le cahier des charges client est la source de vérité : [`docs/requirements.md`](docs/requirements.md). La dernière décision pipeline est OCR.space Free Engine 3 par défaut, OpenRouter `openrouter/free` pour structurer la transcription puis analyser la comptabilité, Mistral OCR conservé comme fournisseur sélectionnable.
 
 ## État d’implémentation
 
-Les **Phases 1 à 4** sont implémentées : fondation multi-cabinet avec inscription du premier administrateur, paramètres du cabinet, rôles/affectations, catalogue d’activités par cabinet, données comptables scoppées, intake privé des factures et OCR asynchrone derrière un contrat fournisseur. OCR.space Engine 3 est actif par défaut et retranscrit le texte ; Mistral reste sélectionnable pour l’offre Pro et l’extraction structurée. La navigation donne accès aux espaces globaux Factures et Données comptables avec sélecteurs limités aux sociétés autorisées ; l’historique des factures reste accessible par société. Le workspace Factures présélectionne la première société accessible, fournit l’export CSV de la sélection courante et le suivi de vérification humaine, sans approbation comptable. La Phase 4 ajoute files Laravel, états/tentatives, messages d’échec/relance et avertissements explicites de cohérence des totaux. Le build TypeScript peut être validé avec npm ; PHP/Composer ne sont pas disponibles dans l’environnement actuel, les migrations et tests Laravel n’y ont donc pas été exécutés.
+Les **Phases 1 à 5** sont implémentées au niveau applicatif : fondation multi-cabinet, référentiels comptables par société, intake et stockage privé, OCR, extraction structurée, contrôle de complétude, propositions comptables, correction/rejet et validation humaine. Une proposition ne crée aucune écriture automatiquement ; l’écriture est créée seulement après validation explicite par un rôle autorisé. OCR brut, transcription et réponses OpenRouter sont audités séparément. Le build TypeScript passe. PHP/Composer ne sont pas disponibles dans l’environnement courant : les migrations, tests et lint PHP doivent être exécutés avant déploiement.
 
-La Phase 2 utilise un jeu de démonstration déterministe de type Sage (12 comptes généraux, 3 comptes analytiques, 3 tiers, 4 journaux et 2 écritures équilibrées par société). Les codes sont stockés en texte, et les montants utilisent trois décimales pour les millimes tunisiens. Le lien fixe « Données comptables » ouvre `/accounting-data` avec un sélecteur limité aux sociétés auxquelles l’utilisateur a accès ; le lien société historique reste disponible depuis son profil. Aucune base Sage ni aucun fichier `.mae` réel n’a été fourni : la synchronisation/import réel reste différé.
+La Phase 2 dispose de données de démonstration déterministes de type Sage. Aucune base Sage ni aucun fichier `.mae` réel n’a été fourni ; import/synchronisation/export Sage reste différé. Les règles fiscales complexes, mémoire apprenante et les avoirs restent à compléter avec un expert-comptable.
 
-La Phase 4 s’arrête à l’extraction OCR : aucune analyse Mistral Small, proposition comptable en partie double, validation humaine d’écriture ou comptabilisation n’est encore implémentée (Phase 5). Le fournisseur actif utilise une clé API serveur configurable ; les documents ne quittent le stockage privé que dans une requête vers le endpoint choisi (`OCR_SPACE_API_KEY` par défaut, ou `MISTRAL_API_KEY`). Le connecteur et l’export Sage réel attendent l’inspection du fichier `.mae` et la confirmation de la version Sage.
+## Stack et prérequis
 
-## Stack
-
-- PHP 8.3+, Laravel 13, Composer
-- MySQL pour l’application ; SQLite en mémoire pour les tests
-- Inertia.js, React 19, TypeScript, Tailwind CSS
-- La Phase 4 utilise la queue Laravel `database` et un provider OCR configurable (OCR.space Engine 3 par défaut, Mistral sélectionnable) ; une clé serveur et un worker actif sont nécessaires pour traiter les jobs.
-
-## Prérequis
-
-- PHP 8.3+ et extensions `pdo_mysql`, `pdo_sqlite` (tests), `mbstring`, `fileinfo`, `openssl` ; Composer
-- MySQL 8+ (ou une version compatible avec Laravel 13)
-- Node.js 18+ et npm
+- PHP 8.3+, Laravel 13, Composer, extensions `pdo_mysql`, `pdo_sqlite`, `mbstring`, `fileinfo`, `openssl`.
+- MySQL 8+ (SQLite en mémoire pour les tests).
+- Node.js 18+ et npm ; React 19, Inertia.js, TypeScript, Tailwind CSS.
+- Laravel Queue `database` ; OCR et IA sont exécutés côté serveur sur la file `ocr`.
 
 ## Démarrage local
 
-Créez une base MySQL vide (`comptaflow` par défaut), puis depuis la racine :
+Créez une base MySQL vide (`comptaflow` par défaut), puis :
 
 ```bash
 cp .env.example .env
@@ -35,48 +27,70 @@ php artisan key:generate
 php artisan migrate --seed
 ```
 
-Le seeder crée un cabinet d’exemple, trois sociétés fictives, un administrateur et leurs référentiels/écritures comptables de démonstration en environnement `local` ou `testing` uniquement. Une nouvelle société peut charger le même jeu depuis « Données comptables » en environnement local/test, avec un rôle administrateur de cabinet ou gestionnaire de factures. Cette action est masquée et refusée hors de ces environnements. Valeurs locales par défaut : `demo@example.test` / `password`. Changez-les avant d’exposer un environnement ; ne réutilisez jamais ces identifiants en production.
+Le seeder crée un cabinet d’exemple, trois sociétés fictives, un administrateur et des référentiels/écritures de démonstration en environnement `local`/`testing` uniquement. Valeurs locales par défaut : `demo@example.test` / `password`. Changez-les avant d’exposer un environnement ; ne réutilisez jamais ces identifiants en production.
 
-L’OCR utilise par défaut le forfait gratuit OCR.space Engine 3. Configurez `OCR_SPACE_API_KEY` côté serveur dans `.env`, puis démarrez un worker Laravel dans un terminal distinct. Le fournisseur gratuit limite chaque fichier à 1 Mo (et les PDF à trois pages) ; Mistral reste disponible en configurant `OCR_PROVIDER=mistral` et `MISTRAL_API_KEY`.
+Configurez les clés fournisseur côté serveur dans `.env` :
+
+```dotenv
+# OCR par défaut
+OCR_PROVIDER=ocr_space
+OCR_SPACE_API_KEY=...
+OCR_SPACE_ENGINE=3
+
+# Structuration du texte OCR.space et proposition comptable
+OPENROUTER_API_KEY=...
+OPENROUTER_MODEL=openrouter/free
+OPENROUTER_ENDPOINT=https://openrouter.ai/api/v1/chat/completions
+OPENROUTER_TIMEOUT=120
+OPENROUTER_MAX_OCR_CHARS=100000
+
+# Facultatif, Mistral fournit directement les données structurées
+# OCR_PROVIDER=mistral
+# MISTRAL_API_KEY=...
+```
+
+`openrouter/free` route dynamiquement vers un modèle gratuit compatible JSON Schema strict ; le modèle réellement retourné est conservé pour audit, mais disponibilité et modèle peuvent varier. OCR.space Free limite un fichier à 1 Mo et les PDF à trois pages. Mistral reste disponible via `OCR_PROVIDER=mistral` ; son annotation structurée évite la normalisation OpenRouter, mais la proposition comptable utilise OpenRouter.
+
+Démarrez un worker dans un terminal distinct :
 
 ```bash
 php artisan queue:work database --queue=ocr --tries=3 --timeout=210
 ```
 
-`DB_QUEUE_RETRY_AFTER=300` doit rester supérieur au timeout du job. Sans clé API du fournisseur actif, les uploads restent privés mais les jobs échouent rapidement avec une erreur visible et peuvent être relancés après configuration. Sur Windows, un `cURL error 60` nécessite un bundle CA PHP valide (`OCR_SPACE_CA_BUNDLE` ou les réglages `curl.cainfo`/`openssl.cafile` du `php.ini` CLI) ; ne désactivez pas la vérification TLS. Après toute modification, redémarrez le worker. N’exposez jamais les clés API au navigateur. Consultez [`docs/modules/invoice-processing/README.md`](docs/modules/invoice-processing/README.md) pour le détail des fournisseurs, limites, états et du dépannage TLS.
+`DB_QUEUE_RETRY_AFTER=300` doit rester supérieur au timeout des jobs. Les états d’avancement sont actualisés dans le workspace Factures. Après toute modification `.env`, redémarrez le worker.
 
-Lancez Vite et Laravel dans deux terminaux :
+### TLS et clés API
+
+La validation TLS reste activée pour OCR.space, Mistral et OpenRouter. Sur Windows ou un serveur configuré sans CA système, fournissez un chemin absolu PEM dans `OCR_SPACE_CA_BUNDLE`, `MISTRAL_CA_BUNDLE` ou `OPENROUTER_CA_BUNDLE` (ou configurez `curl.cainfo` / `openssl.cafile` dans le `php.ini` CLI). Ne définissez jamais `verify=false`. Les clés API ne doivent jamais être envoyées au navigateur ni ajoutées au dépôt. Vérifiez les exigences de confidentialité, région et conservation avant production ; les factures sont transmises au fournisseur configuré.
+
+Démarrez Vite et Laravel dans deux terminaux :
 
 ```bash
 npm run dev
 php artisan serve --host=0.0.0.0
 ```
 
-Ouvrez l’URL affichée par Artisan. Un visiteur peut créer un cabinet et son premier administrateur depuis `/register` ; la commande `php artisan cabinet:create` reste disponible pour le provisionnement administré (invite interactive, mot de passe masqué et minimum 12 caractères). Les administrateurs peuvent ensuite gérer les sociétés, le catalogue d’activités et les utilisateurs depuis l’interface. Pour ajouter un utilisateur en ligne de commande à un cabinet existant : `php artisan users:create {slug-du-cabinet}`.
+Ouvrez l’URL affichée par Artisan. Un visiteur peut créer un cabinet et son premier administrateur depuis `/register` ; les administrateurs peuvent ensuite gérer sociétés, activités et utilisateurs. `php artisan cabinet:create` et `php artisan users:create {slug-du-cabinet}` restent disponibles pour le provisionnement CLI.
 
-#### Dépannage Vite (`ERR_ADDRESS_INVALID`)
+## Modules livrés
 
-Le serveur Vite de l’application écoute sur `127.0.0.1:5173` en port strict. `VITE_DEV_SERVER_ORIGIN` configure l’origine des assets et vaut `http://127.0.0.1:5173` par défaut ; cette valeur doit être joignable par le navigateur (ne définissez pas l’origine à `http://0.0.0.0:5173`). Après changement, arrêtez Vite ; si `public/hot` subsiste alors que Vite est arrêté, supprimez ce fichier puis relancez `npm run dev`. L’aperçu `preview:ui` est un serveur séparé et écoute sur `0.0.0.0`.
+### Cabinets et données comptables (Phases 1–2)
 
-## Retours d’action
+Les rôles sont `cabinet_admin`, `invoice_manager` et `company_user`. Un utilisateur accède aux sociétés via `company_user_access`; toute requête revalide le cabinet et la société côté serveur. Les plans comptables, journaux, tiers, axes et écritures sont propres à chaque société. Les données de démonstration sont fictives ; aucune intégration réelle Sage n’est activée.
 
-Les succès des mutations (connexion/inscription/déconnexion, cabinet, activités, sociétés, profils et accès utilisateurs) affichent un toast Sonner ; les erreurs de validation et les réponses réseau/serveur inattendues affichent un toast d’erreur. L’import de factures confirme les réussites et signale les fichiers refusés individuellement sans annuler les autres ; les actions de revue OCR et d’export CSV donnent également un retour. La liste des utilisateurs masque entièrement la section « Accès société » lorsque le rôle choisi est `cabinet_admin`.
+### Intake, OCR et extraction facture (Phases 3–4)
 
-## Intake et OCR des factures (Phases 3–4)
+Le lien Factures ouvre `/invoices`, qui présélectionne la première société accessible ; les autres choix restent limités aux accès de l’utilisateur. Les gestionnaires importent des PDF/JPG/JPEG/PNG privés, jusqu’à 300 fichiers par sélection UI. Chaque fichier est traité indépendamment, hashé, et un doublon de la même société exige confirmation. L’historique complet reste disponible à `/companies/{company}/invoices`.
 
-Le lien fixe « Factures » ouvre `/invoices`, où la première société accessible est présélectionnée (les autres peuvent être choisies dans le sélecteur). Un administrateur de cabinet ou gestionnaire autorisé peut ensuite sélectionner jusqu’à 300 fichiers. Chaque PDF/JPG/JPEG/PNG est envoyé séparément, validé côté serveur et enregistré dans le stockage privé avec un SHA-256 ; la limite est de 1 Mo avec OCR.space Free et de 20 Mo avec Mistral. Un hash déjà présent dans la même société exige une confirmation. Les utilisateurs société autorisés peuvent consulter et télécharger les documents privés, sans pouvoir importer s’ils n’ont pas le rôle requis. L’historique complet reste disponible à `/companies/{company}/invoices`.
+`ProcessInvoiceOcr` conserve le texte OCR dans `ocr_text` et la réponse brute dans `ocr_response`. OCR.space Engine 3 retourne du texte ; OpenRouter produit le JSON facture validé contre `InvoiceOcrSchema`. Mistral reste une alternative structurée. Les champs manquants, avertissements, erreurs et tentatives sont présentés dans l’interface. Les montants ne sont jamais recalculés/corrigés silencieusement.
 
-Chaque nouvel import est mis en file sur `ocr` après persistance. OCR.space Engine 3 transmet le texte reconnu, visible dans la ligne facture, sans inventer fournisseur/date/montant/lignes ; Mistral reste disponible avec `OCR_PROVIDER=mistral` pour l’extraction structurée. Le worker persiste la réponse brute, les champs réellement disponibles, le modèle/usage ainsi que les erreurs/tentatives. L’interface actualise l’avancement et permet une relance autorisée. Les totaux incohérents ou non vérifiables sont signalés ; aucun montant n’est corrigé automatiquement. L’utilisateur peut exporter en CSV les factures sélectionnées sur la page courante ; un gestionnaire peut marquer des extractions terminées comme vérifiées, ce qui ne valide pas une écriture comptable. Les factures importées sous l’ancien état `uploaded` peuvent être lancées manuellement depuis l’interface.
+### Analyse et validation humaine (Phase 5)
 
-Les résultats OCR nécessitent une vérification humaine ; aucune analyse Mistral Small, proposition comptable ou écriture validée n’est créée (Phase 5). Le suivi de vérification porte sur la transcription OCR uniquement. Les anciennes tables du prototype sont conservées sans migration automatique vers le nouveau schéma. La documentation détaillée est dans [`docs/modules/documents/`](docs/modules/documents/) et [`docs/modules/invoice-processing/`](docs/modules/invoice-processing/).
+L’extraction facture et la proposition comptable sont deux étapes OpenRouter distinctes pour OCR.space. Les données requises sont fournisseur, numéro, date, devise, total et description ou ligne décrite. Si une donnée requise manque, l’analyse comptable ne démarre pas ; le gestionnaire peut corriger la facture dans le dialogue. Une complétude valide déclenche automatiquement l’analyse sur le contexte limité à la société : profil, référentiels actifs et écritures récentes de cette société.
 
-### Aperçu UI sans PHP/MySQL
+La proposition et ses lignes sont persistées avec avertissements, réponse brute, modèle et usage. Les corrections sont horodatées ; si les données facture changent, une nouvelle version de proposition est créée sans effacer les réponses brutes précédentes. Le gestionnaire peut corriger le journal, les comptes, le tiers, l’axe, les libellés et les montants, ou rejeter sans écriture. Le serveur revalide les références société, l’équilibre et le rapprochement au total avant validation. Seule l’action explicite « Valider et créer l’écriture » crée une écriture liée et unique. Aucun export Sage n’est effectué.
 
-```bash
-npm run preview:ui
-```
-
-Cet aperçu Vite est indépendant du backend et utilise des données fictives en mémoire pour présenter le tableau de bord multi-société et les écrans de gestion. Il ne sauvegarde rien et ne contacte ni Sage ni les fournisseurs OCR.
+Les détails sont chargés à la demande dans une boîte de dialogue privée : texte OCR, données structurées, avertissements et proposition. Les utilisateurs autorisés en lecture peuvent consulter ; seuls les administrateurs de cabinet/gestionnaires affectés peuvent corriger et valider. Les mutations et appels fournisseurs disposent de retours toast.
 
 ## Vérifications
 
@@ -85,26 +99,27 @@ npm run build
 composer test
 ```
 
-Les tests Laravel configurent SQLite en mémoire. Les tests OCR simulent OCR.space et Mistral avec `Http::fake()` et ne nécessitent aucune clé réelle. Dans cet environnement PHP/Composer doit être disponible pour exécuter `composer test`.
+`npm run build` valide TypeScript/React. `composer test` nécessite PHP 8.3+ et Composer ; les tests Laravel configurent SQLite en mémoire. Les appels OCR et OpenRouter sont simulés avec `Http::fake()` dans les tests — aucune clé réelle n’est nécessaire.
+
+- `tests/Feature/InvoiceIntakeTest.php` : upload, stockage privé, doublons, rôles, isolation et téléchargement.
+- `tests/Feature/InvoiceOcrProcessingTest.php` : OCR.space, Mistral, schéma et erreurs OCR/TLS.
+- `tests/Feature/OpenRouterInvoicePipelineTest.php` : structuration, audit, blocage complétude, analyse scoppée, corrections, équilibre et validation humaine.
 
 ## Structure utile
 
 ```text
-app/Models/                 Cabinet, User, Company, factures et référentiels/écritures
-app/Policies/               Autorisations d’accès aux sociétés et données métier
-app/Services/AccountingData/ Service idempotent des données comptables d’exemple
-app/Services/Invoices/      Stockage privé et persistance des imports de facture
-app/Services/Ocr/           Providers OCR.space/Mistral, schéma structuré et cohérence des totaux
-app/Jobs/                   Traitement OCR indépendant par facture
-app/Http/Controllers/       Auth, cabinet, tableau de bord, société, comptabilité et factures
-app/Http/Requests/          Validation serveur des formulaires, catalogues et uploads
-resources/js/Pages/         Pages Inertia React, dont Cabinet/Settings, AccountingData/Show et Invoices/Index
-resources/js/Components/    Coquille, navigation, sélecteurs, toasts et composants partagés
-resources/css/app.css       Tailwind et styles applicatifs
-database/migrations/        Schémas Phase 1–4 et migrations historiques/compatibilité
-database/seeders/           Cabinet et référentiels fictifs local/test
-docs/requirements.md        Cahier des charges fourni
-docs/modules/               PRD/README techniques par module
+app/Models/                   Cabinets, utilisateurs, sociétés, factures, propositions et référentiels
+app/Policies/                 Autorisations et isolation société
+app/Services/Ocr/             OCR.space/Mistral, contrat de facture et cohérence des totaux
+app/Services/OpenRouter/      Client OpenRouter strict JSON Schema
+app/Services/Invoices/         Extraction, complétude, propositions et persistance métier
+app/Jobs/                     OCR, extraction et analyse comptable par facture
+app/Http/Controllers/         Auth, cabinet, référentiels, factures et propositions
+app/Http/Requests/            Validation serveur des imports et corrections
+resources/js/Pages/Invoices/  Workspace Factures
+resources/js/Components/      Coquille et dialogue de revue facture
+routes/web.php                Routes web authentifiées
+database/migrations/          Schémas et états Phase 1–5
+docs/requirements.md          Cahier des charges mis à jour
+docs/modules/                 PRD/README techniques par module
 ```
-
-Les migrations historiques créent encore les tables `documents` et `accounting_entries` du premier prototype, mais leurs modèles et routes ont été retirés. La Phase 3 introduit le nouveau schéma `invoices`/`invoice_lines` sans modifier les anciennes tables. Aucune donnée historique n’est copiée ou supprimée automatiquement ; toute migration ou suppression future devra être explicite et précédée d’une sauvegarde.
