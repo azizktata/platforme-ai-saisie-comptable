@@ -7,7 +7,8 @@ OpenRouter est appelé côté serveur pour structurer le texte OCR.space puis pr
 ```dotenv
 OPENROUTER_API_KEY=...
 OPENROUTER_MODEL=openrouter/free
-OPENROUTER_EXTRACTION_MODEL=qwen/qwen3.8-27b:free
+INVOICE_EXTRACTION_PROVIDER=openrouter
+OPENROUTER_EXTRACTION_MODEL=qwen/qwen-2.5-7b-instruct:free
 OPENROUTER_EXTRACTION_MAX_TOKENS=2500
 OPENROUTER_ENDPOINT=https://openrouter.ai/api/v1/chat/completions
 OPENROUTER_TIMEOUT=120
@@ -18,7 +19,7 @@ OPENROUTER_APP_NAME=ComptaFlow
 OPENROUTER_CA_BUNDLE=
 ```
 
-La structuration OCR utilise par défaut Qwen3.8 27B gratuit, avec `reasoning.effort=none`, JSON Schema strict et 2 500 tokens de sortie. `InvoiceOcrSchema` normalise puis valide en Laravel les valeurs brutes retournées. L’analyse comptable utilise `openrouter/free`, qui route dynamiquement vers un modèle gratuit compatible avec la sortie structurée ; modèle retourné, usage et réponse complète sont conservés pour audit. La disponibilité des modèles gratuits dépend d’OpenRouter. Gardez la vérification TLS activée et ne placez jamais la clé dans le navigateur ou les logs. Le démarrage des jobs nécessite un worker Laravel sur la file `ocr` :
+L’extraction du texte OCR utilise séparément `INVOICE_EXTRACTION_PROVIDER` et `OPENROUTER_EXTRACTION_MODEL`, par défaut `qwen/qwen-2.5-7b-instruct:free`. La requête est JSON-only avec un JSON Schema strict ; `InvoiceOcrSchema` normalise et valide en Laravel et aucune sortie d’explication, calcul ou décision comptable n’est admise. L’analyse comptable utilise indépendamment `OPENROUTER_MODEL=openrouter/free`, qui route dynamiquement vers un modèle gratuit compatible avec la sortie structurée ; modèle retourné, usage et réponse complète sont conservés pour audit. La disponibilité des modèles gratuits dépend d’OpenRouter. Gardez la vérification TLS activée et ne placez jamais la clé dans le navigateur ou les logs. Le démarrage des jobs nécessite un worker Laravel sur la file `ocr` :
 
 ```bash
 php artisan queue:work database --queue=ocr --tries=3 --timeout=210
@@ -41,12 +42,14 @@ php artisan queue:work database --queue=ocr --tries=3 --timeout=210
 - `invoices.ocr_response` et `invoices.ocr_text` : réponse OCR et transcription brute.
 - `invoices.extraction_response`, `extraction_model`, `extraction_usage` : appel de structuration OCR par OpenRouter, distinct de la réponse OCR.
 - `invoices.ocr_data`, colonnes normalisées et `invoice_lines` : extraction structurée actuellement utilisée. Les corrections humaines sont horodatées par `extraction_corrected_at` / `extraction_corrected_by` ; la réponse IA initiale reste conservée.
-- `accounting_proposals` / `accounting_proposal_lines` : chaque version conserve proposition, modèle OpenRouter, réponse brute, usage, avertissements, lignes et trace de revue. Les corrections sont horodatées (`modified_by`, `modified_at`). Une correction des données facture crée une nouvelle proposition sans écraser les réponses précédentes ; la boîte de dialogue présente la version la plus récente.
+- `accounting_proposals` / `accounting_proposal_lines` : chaque version conserve proposition, modèle OpenRouter, réponse brute, usage, avertissements, lignes et trace de revue. Les corrections sont horodatées (`modified_by`, `modified_at`). Une correction des données facture crée une nouvelle proposition sans écraser les réponses précédentes ; la page de revue dédiée présente la version la plus récente.
 - `journal_entries.invoice_id` relie l’écriture finale à la facture et empêche la création d’une seconde écriture liée à cette facture.
 
 ### Routes principales
 
-- `GET /companies/{company}/invoices/{invoice}/details` : détails privés pour la boîte de dialogue, et seulement dans le périmètre société.
+- `GET /companies/{company}/invoices/{invoice}` : page dédiée de revue, avec document original et panneau facture/proposition.
+- `GET /companies/{company}/invoices/{invoice}/details` : données privées chargées par le panneau, et seulement dans le périmètre société.
+- `POST /companies/{company}/invoices/{invoice}/extraction/retry` : nouvelle extraction à partir du texte OCR enregistré, sans relancer OCR.
 - `PUT .../extraction` : correction des données de facture par un gestionnaire ; une extraction complète relance automatiquement l’analyse.
 - `PUT .../proposal` : correction des références/montants de la proposition par un gestionnaire.
 - `POST .../proposal/reject` : rejet humain sans écriture.

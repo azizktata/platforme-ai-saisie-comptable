@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Exceptions\AiProviderException;
+use App\Models\AccountingProposal;
 use App\Models\Invoice;
 use App\Services\Invoices\InvoiceDataCompletenessChecker;
 use App\Services\Invoices\InvoiceDataExtractionService;
@@ -105,6 +106,13 @@ class ExtractInvoiceData implements ShouldQueue, ShouldBeUnique
                 ...$totalsChecker->warnings($result->invoiceData),
                 ...$missingFields,
             ];
+
+            AccountingProposal::query()
+                ->where('company_id', $invoice->company_id)
+                ->where('invoice_id', $invoice->id)
+                ->where('status', 'ready')
+                ->lockForUpdate()
+                ->update(['status' => 'superseded']);
 
             $persistence->store($invoice, $result->invoiceData);
             $invoice->forceFill([
@@ -213,13 +221,18 @@ class ExtractInvoiceData implements ShouldQueue, ShouldBeUnique
                 return;
             }
 
-            $invoice->forceFill([
+            $failureAttributes = [
                 'status' => 'data_extraction_failed',
                 'ocr_failed_at' => now(),
                 'ocr_error_code' => $errorCode,
                 'ocr_error_message' => $errorMessages->for($errorCode),
-                ...($rawResponse === null ? [] : ['extraction_response' => $rawResponse]),
-            ])->save();
+            ];
+
+            if ($rawResponse !== null && $invoice->extraction_model === null) {
+                $failureAttributes['extraction_response'] = $rawResponse;
+            }
+
+            $invoice->forceFill($failureAttributes)->save();
         });
     }
 }

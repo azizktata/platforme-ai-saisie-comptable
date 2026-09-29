@@ -1,5 +1,5 @@
 import { router } from '@inertiajs/react';
-import { AlertTriangle, ClipboardCheck, FileText, LoaderCircle, Plus, Save, Trash2, X } from 'lucide-react';
+import { AlertTriangle, ClipboardCheck, FileText, LoaderCircle, Plus, RotateCcw, Save, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -8,6 +8,7 @@ type InvoiceLineData = {
   description: string | null;
   quantity: string | null;
   unit_price: string | null;
+  discount_amount: string | null;
   subtotal: string | null;
   vat_rate: string | null;
   vat_amount: string | null;
@@ -21,16 +22,24 @@ type InvoiceData = {
   supplier_name: string | null;
   supplier_tax_identifier: string | null;
   supplier_address: string | null;
+  supplier_phone: string | null;
+  supplier_mobile: string | null;
+  supplier_email: string | null;
   customer_name: string | null;
   customer_tax_identifier: string | null;
+  customer_reference: string | null;
+  customer_address: string | null;
+  customer_phone: string | null;
   invoice_number: string | null;
   purchase_order_reference: string | null;
+  payment_method: string | null;
   invoice_date: string | null;
   due_date: string | null;
   currency: string | null;
   vat_rate: string | null;
   fodec_rate: string | null;
   subtotal: string | null;
+  total_discount_amount: string | null;
   vat_amount: string | null;
   fodec_amount: string | null;
   other_tax_amount: string | null;
@@ -38,6 +47,7 @@ type InvoiceData = {
   withholding_rate: string | null;
   withholding_amount: string | null;
   total_amount: string | null;
+  net_to_pay_amount: string | null;
   payment_terms: string | null;
   bank_name: string | null;
   bank_account_reference: string | null;
@@ -81,11 +91,14 @@ type InvoiceDetail = {
   id: number;
   status: string;
   original_filename: string;
+  invoice_number: string | null;
   ocr_text: string | null;
+  ocr_display_text: string | null;
   ocr_data: InvoiceData;
   ocr_warnings: string[];
   ocr_error_message: string | null;
   ocr_model: string | null;
+  extraction_provider: string;
   extraction_model: string | null;
   extraction_corrected_at: string | null;
 };
@@ -109,17 +122,17 @@ type Tab = 'ocr' | 'invoice' | 'proposal';
 type Props = {
   companyId: number;
   invoiceId: number;
-  initialTab: Tab;
-  onClose: () => void;
-  onChanged: () => void;
+  onChanged?: () => void;
 };
 
-const editableInvoiceStatuses = ['invoice_incomplete', 'data_extraction_failed', 'accounting_analysis_failed', 'proposal_ready', 'proposal_rejected'];
+const editableInvoiceStatuses = ['ocr_completed', 'invoice_incomplete', 'data_extraction_failed', 'accounting_analysis_failed', 'proposal_ready', 'proposal_rejected'];
 const inputClass = 'mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100';
 const selectClass = inputClass;
 
-export default function InvoiceReviewDialog({ companyId, invoiceId, initialTab, onClose, onChanged }: Props) {
-  const [tab, setTab] = useState<Tab>(initialTab);
+export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged }: Props) {
+  const [tab, setTab] = useState<Tab>(() => window.location.hash === '#ocr-text'
+    ? 'ocr'
+    : window.location.hash === '#proposal' ? 'proposal' : 'invoice');
   const [detail, setDetail] = useState<DetailResponse | null>(null);
   const [invoiceData, setInvoiceData] = useState<InvoiceData | null>(null);
   const [proposalForm, setProposalForm] = useState<Proposal | null>(null);
@@ -128,6 +141,8 @@ export default function InvoiceReviewDialog({ companyId, invoiceId, initialTab, 
   const [savingProposal, setSavingProposal] = useState(false);
   const [approving, setApproving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
+  const [reextracting, setReextracting] = useState(false);
+  const [retryingOcr, setRetryingOcr] = useState(false);
   const observedStatus = useRef<string | null>(null);
 
   const loadDetails = useCallback(async (showLoader = true, showError = true) => {
@@ -175,14 +190,6 @@ export default function InvoiceReviewDialog({ companyId, invoiceId, initialTab, 
     return () => window.clearInterval(interval);
   }, [detail?.invoice.status, loadDetails]);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !savingInvoice && !savingProposal && !approving) onClose();
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [onClose, savingInvoice, savingProposal, approving]);
-
   const updateInvoiceField = <K extends keyof InvoiceData>(key: K, value: InvoiceData[K]) => {
     setInvoiceData((current) => current ? { ...current, [key]: value } : current);
   };
@@ -204,11 +211,40 @@ export default function InvoiceReviewDialog({ companyId, invoiceId, initialTab, 
       preserveScroll: true,
       onSuccess: () => {
         toast.success('Les données de la facture sont enregistrées.');
-        onChanged();
+        onChanged?.();
         void loadDetails();
       },
       onError: (errors) => toast.error(firstError(errors) || 'Les données de la facture n’ont pas pu être enregistrées.'),
       onFinish: () => setSavingInvoice(false),
+    });
+  };
+
+  const rerunExtraction = () => {
+    if (!detail?.can_manage || !detail.invoice.ocr_text?.trim() || reextracting) return;
+
+    setReextracting(true);
+    router.post(`/companies/${companyId}/invoices/${invoiceId}/extraction/retry`, {}, {
+      preserveScroll: true,
+      onSuccess: () => {
+        toast.success('L’extraction est relancée depuis le texte OCR existant.');
+        void loadDetails();
+      },
+      onError: (errors) => toast.error(firstError(errors) || 'L’extraction n’a pas pu être relancée.'),
+      onFinish: () => setReextracting(false),
+    });
+  };
+
+  const retryOcr = () => {
+    if (retryingOcr) return;
+    setRetryingOcr(true);
+    router.post(`/companies/${companyId}/invoices/${invoiceId}/ocr/retry`, {}, {
+      preserveScroll: true,
+      onSuccess: () => {
+        toast.success('Le traitement OCR est relancé.');
+        void loadDetails();
+      },
+      onError: (errors) => toast.error(firstError(errors) || 'Le traitement OCR n’a pas pu être relancé.'),
+      onFinish: () => setRetryingOcr(false),
     });
   };
 
@@ -245,7 +281,7 @@ export default function InvoiceReviewDialog({ companyId, invoiceId, initialTab, 
       preserveScroll: true,
       onSuccess: () => {
         toast.success('La proposition comptable est enregistrée.');
-        onChanged();
+        onChanged?.();
         void loadDetails();
       },
       onError: (errors) => toast.error(firstError(errors) || 'La proposition comptable n’a pas pu être enregistrée.'),
@@ -260,7 +296,7 @@ export default function InvoiceReviewDialog({ companyId, invoiceId, initialTab, 
       preserveScroll: true,
       onSuccess: () => {
         toast.success('Proposition validée. L’écriture comptable est maintenant créée.');
-        onChanged();
+        onChanged?.();
         void loadDetails();
       },
       onError: (errors) => toast.error(firstError(errors) || 'La proposition ne peut pas encore être validée.'),
@@ -275,7 +311,7 @@ export default function InvoiceReviewDialog({ companyId, invoiceId, initialTab, 
       preserveScroll: true,
       onSuccess: () => {
         toast.success('Proposition rejetée. Aucune écriture n’a été créée.');
-        onChanged();
+        onChanged?.();
         void loadDetails();
       },
       onError: (errors) => toast.error(firstError(errors) || 'La proposition n’a pas pu être rejetée.'),
@@ -283,25 +319,40 @@ export default function InvoiceReviewDialog({ companyId, invoiceId, initialTab, 
     });
   };
 
+  const extractionInProgress = Boolean(detail && ['ocr_queued', 'ocr_processing', 'data_extraction', 'accounting_analysis'].includes(detail.invoice.status));
+  const canRerunExtraction = Boolean(detail?.can_manage && detail.invoice.ocr_text?.trim() && !extractionInProgress && detail.invoice.status !== 'accounting_validated');
+  const canRetryOcr = Boolean(detail?.can_manage && ['uploaded', 'ocr_failed'].includes(detail.invoice.status));
   const canEditInvoice = Boolean(detail?.can_manage && detail.invoice && editableInvoiceStatuses.includes(detail.invoice.status));
   const canEditProposal = Boolean(detail?.can_manage && detail.proposal?.status === 'ready' && detail.invoice.status === 'proposal_ready');
   const proposalNeedsSave = Boolean(detail?.proposal && proposalForm && JSON.stringify(detail.proposal) !== JSON.stringify(proposalForm));
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-3 sm:p-6" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section role="dialog" aria-modal="true" aria-labelledby="invoice-review-title" className="flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
-        <header className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-6">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">Traitement de la facture</p>
-            <h2 id="invoice-review-title" className="mt-1 truncate text-lg font-semibold text-slate-900">
-              {detail?.invoice.original_filename || 'Détails de la facture'}
-            </h2>
-            {detail && <p className="mt-1 text-xs text-slate-500">{statusLabel(detail.invoice.status)}{detail.invoice.ocr_model ? ` · OCR : ${detail.invoice.ocr_model}` : ''}{detail.invoice.extraction_model ? ` · Extraction : ${detail.invoice.extraction_model}` : ''}</p>}
+    <section aria-labelledby="invoice-review-title" className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 px-4 py-4 sm:px-5">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">Revue de la facture · #{invoiceId}</p>
+          <h2 id="invoice-review-title" className="mt-1 truncate text-lg font-semibold text-slate-900">
+            {invoiceData?.invoice_number || detail?.invoice.original_filename || 'Détails de la facture'}
+          </h2>
+          <p className="mt-1 truncate text-xs text-slate-500">{detail?.invoice.original_filename || 'Chargement du document…'}</p>
+          {detail && <p className="mt-1 text-xs text-slate-600">{statusLabel(detail.invoice.status)}{detail.invoice.extraction_model ? ` · Extraction ${detail.invoice.extraction_provider} : ${detail.invoice.extraction_model}` : ''}{detail.invoice.ocr_model ? ` · OCR : ${detail.invoice.ocr_model}` : ''}</p>}
+        </div>
+        {detail?.can_manage && (
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={rerunExtraction} disabled={!canRerunExtraction || reextracting} className="inline-flex items-center gap-2 rounded-md border border-teal-300 px-3 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50" title={!detail.invoice.ocr_text ? 'Effectuez d’abord l’OCR pour créer un texte à extraire.' : undefined}>
+              {reextracting ? <LoaderCircle className="animate-spin" size={16} /> : <RotateCcw size={16} />}
+              {reextracting ? 'Relance…' : 'Relancer l’extraction'}
+            </button>
+            {canRetryOcr && <button type="button" onClick={retryOcr} disabled={retryingOcr} className="rounded-md border border-amber-300 px-3 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50">{retryingOcr ? 'Relance OCR…' : 'Lancer / relancer OCR'}</button>}
           </div>
-          <button type="button" onClick={onClose} aria-label="Fermer la fenêtre" className="rounded-md p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900"><X size={19} /></button>
-        </header>
+        )}
+      </header>
 
-        <nav className="flex flex-wrap gap-1 border-b border-slate-200 px-4 pt-2" aria-label="Sections de la facture">
+      {!detail?.invoice.ocr_text && detail?.can_manage && (
+        <p className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">Aucun texte OCR enregistré : l’extraction ne peut pas être relancée avant l’étape OCR.</p>
+      )}
+
+      <nav className="flex flex-wrap gap-1 border-b border-slate-200 px-4 pt-2" aria-label="Sections de la facture">
           {([
             ['ocr', 'Texte OCR'],
             ['invoice', 'Données facture'],
@@ -320,8 +371,8 @@ export default function InvoiceReviewDialog({ companyId, invoiceId, initialTab, 
             {tab === 'ocr' && (
               <section>
                 <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800"><FileText size={17} className="text-teal-700" /> Texte reconnu par OCR</div>
-                {invoiceData && detail.invoice.ocr_text ? (
-                  <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 p-4 font-mono text-xs leading-6 text-slate-800">{detail.invoice.ocr_text}</pre>
+                {invoiceData && detail.invoice.ocr_display_text ? (
+                  <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 p-4 font-mono text-xs leading-6 text-slate-800">{detail.invoice.ocr_display_text}</pre>
                 ) : (
                   <p className="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">Aucun texte OCR n’est disponible pour cette étape du traitement.{detail.invoice.ocr_error_message ? ` ${detail.invoice.ocr_error_message}` : ''}</p>
                 )}
@@ -336,67 +387,77 @@ export default function InvoiceReviewDialog({ companyId, invoiceId, initialTab, 
                 {canEditInvoice ? (
                   <form onSubmit={saveInvoiceData} className="space-y-5">
                     <fieldset disabled={savingInvoice} className="space-y-5 disabled:opacity-70">
-                      <FieldGroup title="Identification">
-                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                          <TextField label="Fournisseur *" value={invoiceData.supplier_name} onChange={(value) => updateInvoiceField('supplier_name', value)} />
-                          <TextField label="Matricule fiscal fournisseur" value={invoiceData.supplier_tax_identifier} onChange={(value) => updateInvoiceField('supplier_tax_identifier', value)} />
-                          <TextField label="Numéro de facture *" value={invoiceData.invoice_number} onChange={(value) => updateInvoiceField('invoice_number', value)} />
-                          <TextField label="Client facturé" value={invoiceData.customer_name} onChange={(value) => updateInvoiceField('customer_name', value)} />
-                          <TextField label="Matricule fiscal client" value={invoiceData.customer_tax_identifier} onChange={(value) => updateInvoiceField('customer_tax_identifier', value)} />
-                          <TextField label="Référence commande" value={invoiceData.purchase_order_reference} onChange={(value) => updateInvoiceField('purchase_order_reference', value)} />
+                      <FieldGroup title="Fournisseur">
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <TextField label="Nom du fournisseur *" value={invoiceData.supplier_name} onChange={(value) => updateInvoiceField('supplier_name', value)} />
+                          <TextField label="Immatriculation fiscale" value={invoiceData.supplier_tax_identifier} onChange={(value) => updateInvoiceField('supplier_tax_identifier', value)} />
+                          <TextField label="Téléphone" value={invoiceData.supplier_phone} onChange={(value) => updateInvoiceField('supplier_phone', value)} />
+                          <TextField label="Mobile" value={invoiceData.supplier_mobile} onChange={(value) => updateInvoiceField('supplier_mobile', value)} />
+                          <TextField label="E-mail" value={invoiceData.supplier_email} onChange={(value) => updateInvoiceField('supplier_email', value)} />
                         </div>
-                        <TextAreaField label="Adresse fournisseur" value={invoiceData.supplier_address} onChange={(value) => updateInvoiceField('supplier_address', value)} />
+                        <TextAreaField label="Adresse du fournisseur" value={invoiceData.supplier_address} onChange={(value) => updateInvoiceField('supplier_address', value)} />
                       </FieldGroup>
 
-                      <FieldGroup title="Dates, description et devise">
-                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                          <TextField label="Date facture *" type="date" value={invoiceData.invoice_date} onChange={(value) => updateInvoiceField('invoice_date', value)} />
+                      <FieldGroup title="Client">
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <TextField label="Nom du client" value={invoiceData.customer_name} onChange={(value) => updateInvoiceField('customer_name', value)} />
+                          <TextField label="Référence client" value={invoiceData.customer_reference} onChange={(value) => updateInvoiceField('customer_reference', value)} />
+                          <TextField label="Matricule fiscal client" value={invoiceData.customer_tax_identifier} onChange={(value) => updateInvoiceField('customer_tax_identifier', value)} />
+                          <TextField label="Téléphone client" value={invoiceData.customer_phone} onChange={(value) => updateInvoiceField('customer_phone', value)} />
+                        </div>
+                        <TextAreaField label="Adresse du client" value={invoiceData.customer_address} onChange={(value) => updateInvoiceField('customer_address', value)} />
+                      </FieldGroup>
+
+                      <FieldGroup title="Informations de facture">
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <TextField label="Numéro de facture *" value={invoiceData.invoice_number} onChange={(value) => updateInvoiceField('invoice_number', value)} />
+                          <TextField label="Date de facture *" type="date" value={invoiceData.invoice_date} onChange={(value) => updateInvoiceField('invoice_date', value)} />
                           <TextField label="Date d’échéance" type="date" value={invoiceData.due_date} onChange={(value) => updateInvoiceField('due_date', value)} />
                           <TextField label="Devise ISO *" value={invoiceData.currency} onChange={(value) => updateInvoiceField('currency', value?.toUpperCase() ?? null)} placeholder="TND" maxLength={3} />
+                          <TextField label="Mode de paiement" value={invoiceData.payment_method} onChange={(value) => updateInvoiceField('payment_method', value)} />
                           <TextField label="Conditions de paiement" value={invoiceData.payment_terms} onChange={(value) => updateInvoiceField('payment_terms', value)} />
+                          <TextField label="Référence de commande" value={invoiceData.purchase_order_reference} onChange={(value) => updateInvoiceField('purchase_order_reference', value)} />
                         </div>
                         <TextAreaField label="Description de la facture *" value={invoiceData.description} onChange={(value) => updateInvoiceField('description', value)} />
                       </FieldGroup>
 
-                      <FieldGroup title="Montants et taxes">
-                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                          <DecimalField label="Sous-total HT" value={invoiceData.subtotal} onChange={(value) => updateInvoiceField('subtotal', value)} />
-                          <DecimalField label="Taux TVA (%)" value={invoiceData.vat_rate} onChange={(value) => updateInvoiceField('vat_rate', value)} />
-                          <DecimalField label="Montant TVA" value={invoiceData.vat_amount} onChange={(value) => updateInvoiceField('vat_amount', value)} />
-                          <DecimalField label="Taux FODEC (%)" value={invoiceData.fodec_rate} onChange={(value) => updateInvoiceField('fodec_rate', value)} />
-                          <DecimalField label="Montant FODEC" value={invoiceData.fodec_amount} onChange={(value) => updateInvoiceField('fodec_amount', value)} />
-                          <DecimalField label="Autres taxes" value={invoiceData.other_tax_amount} onChange={(value) => updateInvoiceField('other_tax_amount', value)} />
-                          <DecimalField label="Timbre fiscal" value={invoiceData.stamp_amount} onChange={(value) => updateInvoiceField('stamp_amount', value)} />
-                          <DecimalField label="Taux retenue (%)" value={invoiceData.withholding_rate} onChange={(value) => updateInvoiceField('withholding_rate', value)} />
-                          <DecimalField label="Retenue à la source" value={invoiceData.withholding_amount} onChange={(value) => updateInvoiceField('withholding_amount', value)} />
-                          <DecimalField label="Total à payer *" value={invoiceData.total_amount} onChange={(value) => updateInvoiceField('total_amount', value)} />
+                      <FieldGroup title={`Lignes de facture (${invoiceData.lines.length})`}>
+                        <div className="overflow-x-auto rounded-lg border border-slate-200">
+                          <table className="min-w-[760px] w-full text-left text-xs">
+                            <thead className="bg-slate-50 text-slate-600"><tr><th className="px-3 py-2">Description</th><th className="px-3 py-2">Quantité</th><th className="px-3 py-2">Prix unitaire HT</th><th className="px-3 py-2">Remise</th><th className="px-3 py-2">TVA</th><th className="px-3 py-2">Total TTC</th><th className="px-2 py-2"><span className="sr-only">Supprimer</span></th></tr></thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {invoiceData.lines.map((line, index) => (
+                                <tr key={index}>
+                                  <td className="min-w-48 px-2 py-2"><input aria-label={`Description de la ligne ${index + 1}`} className="w-full min-w-44 rounded border border-slate-300 px-2 py-1.5" value={line.description ?? ''} onChange={(event) => updateInvoiceLine(index, 'description', event.target.value || null)} /></td>
+                                  <td className="px-2 py-2"><input aria-label={`Quantité de la ligne ${index + 1}`} inputMode="decimal" className="w-20 rounded border border-slate-300 px-2 py-1.5" value={line.quantity ?? ''} onChange={(event) => updateInvoiceLine(index, 'quantity', event.target.value || null)} /></td>
+                                  <td className="px-2 py-2"><input aria-label={`Prix unitaire HT de la ligne ${index + 1}`} inputMode="decimal" className="w-28 rounded border border-slate-300 px-2 py-1.5" value={line.unit_price ?? ''} onChange={(event) => updateInvoiceLine(index, 'unit_price', event.target.value || null)} /></td>
+                                  <td className="px-2 py-2"><input aria-label={`Remise de la ligne ${index + 1}`} inputMode="decimal" className="w-24 rounded border border-slate-300 px-2 py-1.5" value={line.discount_amount ?? ''} onChange={(event) => updateInvoiceLine(index, 'discount_amount', event.target.value || null)} /></td>
+                                  <td className="px-2 py-2"><input aria-label={`Taux TVA de la ligne ${index + 1}`} inputMode="decimal" className="w-20 rounded border border-slate-300 px-2 py-1.5" value={line.vat_rate ?? ''} onChange={(event) => updateInvoiceLine(index, 'vat_rate', event.target.value || null)} /></td>
+                                  <td className="px-2 py-2"><input aria-label={`Total TTC de la ligne ${index + 1}`} inputMode="decimal" className="w-28 rounded border border-slate-300 px-2 py-1.5" value={line.total_amount ?? ''} onChange={(event) => updateInvoiceLine(index, 'total_amount', event.target.value || null)} /></td>
+                                  <td className="px-2 py-2"><button type="button" aria-label={`Supprimer la ligne ${index + 1}`} onClick={() => setInvoiceData((current) => current ? { ...current, lines: current.lines.filter((_, lineIndex) => lineIndex !== index) } : current)} className="rounded p-1 text-red-600 hover:bg-red-50"><Trash2 size={14} /></button></td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
+                        <button type="button" onClick={() => setInvoiceData((current) => current ? { ...current, lines: [...current.lines, emptyLine()] } : current)} className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:border-teal-400 hover:text-teal-800"><Plus size={14} /> Ajouter une ligne</button>
+                        {invoiceData.lines.map((line, index) => <details key={`more-${index}`} className="rounded-md border border-slate-200 px-3 py-2"><summary className="cursor-pointer text-xs font-semibold text-slate-700">Détails de ligne {index + 1}</summary><div className="mt-3 grid gap-3 sm:grid-cols-2"><TextField label="Référence" value={line.reference} onChange={(value) => updateInvoiceLine(index, 'reference', value)} /><DecimalField label="Total HT de ligne" value={line.subtotal} onChange={(value) => updateInvoiceLine(index, 'subtotal', value)} /><DecimalField label="Montant TVA" value={line.vat_amount} onChange={(value) => updateInvoiceLine(index, 'vat_amount', value)} /><DecimalField label="Taux FODEC (%)" value={line.fodec_rate} onChange={(value) => updateInvoiceLine(index, 'fodec_rate', value)} /><DecimalField label="Montant FODEC" value={line.fodec_amount} onChange={(value) => updateInvoiceLine(index, 'fodec_amount', value)} /><DecimalField label="Autres taxes" value={line.other_tax_amount} onChange={(value) => updateInvoiceLine(index, 'other_tax_amount', value)} /></div></details>)}
                       </FieldGroup>
 
-                      <FieldGroup title={`Lignes de facture (${invoiceData.lines.length})`}>
-                        <div className="space-y-4">
-                          {invoiceData.lines.map((line, index) => (
-                            <div key={index} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                              <div className="mb-3 flex items-center justify-between">
-                                <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">Ligne {index + 1}</span>
-                                <button type="button" onClick={() => setInvoiceData((current) => current ? { ...current, lines: current.lines.filter((_, lineIndex) => lineIndex !== index) } : current)} className="inline-flex items-center gap-1 text-xs font-semibold text-red-700 hover:text-red-900"><Trash2 size={13} /> Supprimer</button>
-                              </div>
-                              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                                <TextField label="Référence" value={line.reference} onChange={(value) => updateInvoiceLine(index, 'reference', value)} />
-                                <DecimalField label="Quantité" value={line.quantity} onChange={(value) => updateInvoiceLine(index, 'quantity', value)} />
-                                <DecimalField label="Prix unitaire" value={line.unit_price} onChange={(value) => updateInvoiceLine(index, 'unit_price', value)} />
-                                <DecimalField label="Sous-total" value={line.subtotal} onChange={(value) => updateInvoiceLine(index, 'subtotal', value)} />
-                                <DecimalField label="Taux TVA (%)" value={line.vat_rate} onChange={(value) => updateInvoiceLine(index, 'vat_rate', value)} />
-                                <DecimalField label="Montant TVA" value={line.vat_amount} onChange={(value) => updateInvoiceLine(index, 'vat_amount', value)} />
-                                <DecimalField label="Taux FODEC (%)" value={line.fodec_rate} onChange={(value) => updateInvoiceLine(index, 'fodec_rate', value)} />
-                                <DecimalField label="Montant FODEC" value={line.fodec_amount} onChange={(value) => updateInvoiceLine(index, 'fodec_amount', value)} />
-                                <DecimalField label="Autres taxes" value={line.other_tax_amount} onChange={(value) => updateInvoiceLine(index, 'other_tax_amount', value)} />
-                                <DecimalField label="Total ligne" value={line.total_amount} onChange={(value) => updateInvoiceLine(index, 'total_amount', value)} />
-                              </div>
-                              <TextAreaField label="Description de la ligne" value={line.description} onChange={(value) => updateInvoiceLine(index, 'description', value)} />
-                            </div>
-                          ))}
-                          <button type="button" onClick={() => setInvoiceData((current) => current ? { ...current, lines: [...current.lines, emptyLine()] } : current)} className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:border-teal-400 hover:text-teal-800"><Plus size={14} /> Ajouter une ligne</button>
+                      <FieldGroup title="Totaux et taxes">
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <DecimalField label="Total HT" value={invoiceData.subtotal} onChange={(value) => updateInvoiceField('subtotal', value)} />
+                          <DecimalField label="Remise totale" value={invoiceData.total_discount_amount} onChange={(value) => updateInvoiceField('total_discount_amount', value)} />
+                          <DecimalField label="Taux TVA global (%)" value={invoiceData.vat_rate} onChange={(value) => updateInvoiceField('vat_rate', value)} />
+                          <DecimalField label="Total TVA" value={invoiceData.vat_amount} onChange={(value) => updateInvoiceField('vat_amount', value)} />
+                          <DecimalField label="Taux FODEC global (%)" value={invoiceData.fodec_rate} onChange={(value) => updateInvoiceField('fodec_rate', value)} />
+                          <DecimalField label="FODEC" value={invoiceData.fodec_amount} onChange={(value) => updateInvoiceField('fodec_amount', value)} />
+                          <DecimalField label="Autres taxes" value={invoiceData.other_tax_amount} onChange={(value) => updateInvoiceField('other_tax_amount', value)} />
+                          <DecimalField label="Droit de timbre" value={invoiceData.stamp_amount} onChange={(value) => updateInvoiceField('stamp_amount', value)} />
+                          <DecimalField label="Taux retenue (%)" value={invoiceData.withholding_rate} onChange={(value) => updateInvoiceField('withholding_rate', value)} />
+                          <DecimalField label="Retenue à la source" value={invoiceData.withholding_amount} onChange={(value) => updateInvoiceField('withholding_amount', value)} />
+                          <DecimalField label="Total TTC" value={invoiceData.total_amount} onChange={(value) => updateInvoiceField('total_amount', value)} />
+                          <DecimalField label="Net à payer" value={invoiceData.net_to_pay_amount} onChange={(value) => updateInvoiceField('net_to_pay_amount', value)} />
                         </div>
                       </FieldGroup>
 
@@ -477,7 +538,7 @@ export default function InvoiceReviewDialog({ companyId, invoiceId, initialTab, 
                       <ProposalReadOnly proposal={detail.proposal} />
                     )}
 
-                    {detail.proposal.status === 'ready' && detail.can_manage && (
+                    {detail.proposal.status === 'ready' && detail.invoice.status === 'proposal_ready' && detail.can_manage && (
                       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
                         <p className="max-w-2xl text-xs leading-5 text-amber-950">La validation humaine crée une écriture dans le journal sélectionné. Vérifiez les comptes, les montants et le document original avant de confirmer.{proposalNeedsSave ? ' Enregistrez d’abord vos corrections.' : ''}</p>
                         <div className="flex flex-wrap gap-2">
@@ -501,12 +562,10 @@ export default function InvoiceReviewDialog({ companyId, invoiceId, initialTab, 
           </div>
         )}
 
-        <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3">
-          <p className="text-xs text-slate-500">Aucune écriture n’est créée avant votre validation explicite.</p>
-          <button type="button" onClick={onClose} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Fermer</button>
-        </footer>
-      </section>
-    </div>
+      <footer className="border-t border-slate-200 bg-slate-50 px-4 py-3">
+        <p className="text-xs text-slate-500">Aucune écriture n’est créée avant votre validation explicite.</p>
+      </footer>
+    </section>
   );
 }
 
@@ -528,11 +587,65 @@ function TextAreaField({ label, value, onChange }: { label: string; value: strin
 
 function InvoiceDataSummary({ data }: { data: InvoiceData }) {
   const fields: [string, string | null][] = [
-    ['Fournisseur', data.supplier_name], ['Matricule fiscal fournisseur', data.supplier_tax_identifier], ['N° facture', data.invoice_number],
-    ['Date', data.invoice_date], ['Échéance', data.due_date], ['Devise', data.currency], ['Sous-total', data.subtotal], ['TVA', data.vat_amount],
-    ['FODEC', data.fodec_amount], ['Autres taxes', data.other_tax_amount], ['Timbre', data.stamp_amount], ['Retenue', data.withholding_amount], ['Total', data.total_amount],
+    ['Fournisseur', data.supplier_name],
+    ['Immatriculation fiscale', data.supplier_tax_identifier],
+    ['Adresse fournisseur', data.supplier_address],
+    ['Téléphone fournisseur', data.supplier_phone],
+    ['Mobile fournisseur', data.supplier_mobile],
+    ['E-mail fournisseur', data.supplier_email],
+    ['Banque', data.bank_name],
+    ['RIB / IBAN', data.bank_account_reference],
+    ['Client', data.customer_name],
+    ['Matricule fiscal client', data.customer_tax_identifier],
+    ['Référence client', data.customer_reference],
+    ['Adresse client', data.customer_address],
+    ['Téléphone client', data.customer_phone],
+    ['N° facture', data.invoice_number],
+    ['Date facture', data.invoice_date],
+    ['Échéance', data.due_date],
+    ['Devise', data.currency],
+    ['Mode de paiement', data.payment_method],
+    ['Conditions de paiement', data.payment_terms],
+    ['Référence commande', data.purchase_order_reference],
+    ['Total HT', data.subtotal],
+    ['Remise totale', data.total_discount_amount],
+    ['Taux TVA global', data.vat_rate ? `${data.vat_rate}%` : null],
+    ['TVA', data.vat_amount],
+    ['Taux FODEC global', data.fodec_rate ? `${data.fodec_rate}%` : null],
+    ['FODEC', data.fodec_amount],
+    ['Autres taxes', data.other_tax_amount],
+    ['Droit de timbre', data.stamp_amount],
+    ['Taux retenue', data.withholding_rate ? `${data.withholding_rate}%` : null],
+    ['Retenue à la source', data.withholding_amount],
+    ['Total TTC', data.total_amount],
+    ['Net à payer', data.net_to_pay_amount],
   ];
-  return <div className="space-y-4"><dl className="grid gap-3 rounded-lg border border-slate-200 p-4 sm:grid-cols-2 lg:grid-cols-3">{fields.map(([label, value]) => <div key={label}><dt className="text-xs text-slate-500">{label}</dt><dd className="mt-1 break-words text-sm font-medium text-slate-900">{value || '—'}</dd></div>)}</dl><div className="rounded-lg border border-slate-200 p-4"><h3 className="text-sm font-semibold text-slate-900">Description</h3><p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{data.description || '—'}</p></div><div className="space-y-2"><h3 className="text-sm font-semibold text-slate-900">Lignes · {data.lines.length}</h3>{data.lines.map((line, index) => <div key={index} className="rounded-md border border-slate-200 p-3 text-sm"><p className="font-medium text-slate-800">{line.description || 'Ligne sans description'}</p><p className="mt-1 text-xs text-slate-500">Référence {line.reference || '—'} · HT {line.subtotal || '—'} · TVA {line.vat_amount || '—'} · Total {line.total_amount || '—'}</p></div>)}</div></div>;
+
+  return (
+    <div className="space-y-4">
+      <dl className="grid gap-3 rounded-lg border border-slate-200 p-4 sm:grid-cols-2">
+        {fields.map(([label, value]) => (
+          <div key={label}>
+            <dt className="text-xs text-slate-500">{label}</dt>
+            <dd className="mt-1 break-words text-sm font-medium text-slate-900">{value || '—'}</dd>
+          </div>
+        ))}
+      </dl>
+      <section className="rounded-lg border border-slate-200 p-4">
+        <h3 className="text-sm font-semibold text-slate-900">Description</h3>
+        <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{data.description || '—'}</p>
+      </section>
+      <section className="space-y-2">
+        <h3 className="text-sm font-semibold text-slate-900">Lignes · {data.lines.length}</h3>
+        {data.lines.map((line, index) => (
+          <div key={index} className="rounded-md border border-slate-200 p-3 text-sm">
+            <p className="font-medium text-slate-800">{line.description || 'Ligne sans description'}</p>
+            <p className="mt-1 text-xs text-slate-500">Référence {line.reference || '—'} · Quantité {line.quantity || '—'} · PU {line.unit_price || '—'} · HT {line.subtotal || '—'} · Remise {line.discount_amount || '—'} · TVA {line.vat_rate ? `${line.vat_rate}%` : '—'} ({line.vat_amount || '—'}) · FODEC {line.fodec_amount || '—'} · Autres taxes {line.other_tax_amount || '—'} · TTC {line.total_amount || '—'}</p>
+          </div>
+        ))}
+      </section>
+    </div>
+  );
 }
 
 function ProposalReadOnly({ proposal }: { proposal: Proposal }) {
@@ -577,7 +690,7 @@ function isBlockingProposalWarning(warning: string): boolean {
 }
 
 function emptyLine(): InvoiceLineData {
-  return { reference: null, description: null, quantity: null, unit_price: null, subtotal: null, vat_rate: null, vat_amount: null, fodec_rate: null, fodec_amount: null, other_tax_amount: null, total_amount: null };
+  return { reference: null, description: null, quantity: null, unit_price: null, discount_amount: null, subtotal: null, vat_rate: null, vat_amount: null, fodec_rate: null, fodec_amount: null, other_tax_amount: null, total_amount: null };
 }
 
 function firstError(errors: Record<string, string | string[]>): string | null {

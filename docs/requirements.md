@@ -33,7 +33,7 @@ Le traitement démarre automatiquement après l’import et utilise des Laravel 
 
 1. persister le fichier dans un stockage privé et planifier le traitement OCR ;
 2. utiliser OCR.space Free Engine 3 par défaut pour transcrire le texte ; conserver Mistral comme fournisseur sélectionnable, qui retourne déjà une annotation structurée ;
-3. pour le texte OCR.space, appeler OpenRouter avec un modèle gratuit d’extraction sans raisonnement (Qwen3.8 27B par défaut) et un schéma JSON strict conforme au contrat facture ; demander uniquement le JSON, sans explication ni calcul ; conserver la réponse OCR brute, la transcription et la réponse d’extraction OpenRouter séparément ;
+3. pour le texte OCR.space, appeler le fournisseur d’extraction configuré (OpenRouter par défaut avec `qwen/qwen-2.5-7b-instruct:free`) et transmettre le schéma JSON strict du contrat facture ; demander uniquement le JSON, sans explication ni raisonnement ; ne jamais calculer/réconcilier les totaux ni interpréter un nombre isolé comme ligne ; normaliser et valider dans Laravel ; conserver les réponses OCR et extraction séparément ;
 4. valider la structure, persister les données utilisables et bloquer l’analyse tant que les champs requis manquent ; permettre à un gestionnaire autorisé de corriger ces champs ;
 5. dès que les données sont complètes, lancer automatiquement un second appel OpenRouter pour l’analyse comptable contextualisée, persister la proposition et signaler les étapes, erreurs et résultats dans l’interface.
 
@@ -79,7 +79,7 @@ La version/base Sage et le fichier `.mae` ne sont pas fournis à ce stade. Le sc
 
 ## 7. Interface et tableau de bord
 
-La boîte de dialogue présente le texte OCR brut, les champs structurés, les avertissements et la proposition. L’utilisateur autorisé peut corriger les champs facture, modifier les lignes de proposition, consulter confiance/contrôles, rejeter ou valider. Aucune écriture n’est créée avant validation humaine explicite.
+La page de revue dédiée présente le document original dans un visualiseur à côté des champs facture, du texte OCR brut, des avertissements et de la proposition. L’utilisateur autorisé peut corriger les données facture et les lignes de proposition, consulter les contrôles, rejeter ou valider. Le visualiseur propose zoom, ajustement, rotation, plein écran et navigation PDF lorsque disponibles. Aucune écriture n’est créée avant validation humaine explicite.
 
 Le tableau de bord cible : factures importées, analysées, validées, en attente et à corriger ; taux de reconnaissance et de validation automatique ; erreurs ; temps économisé ; écritures générées.
 
@@ -121,7 +121,7 @@ Important constraints: `invoices.third_party_id` is nullable until supplier matc
 - **React 19**, Inertia.js, TypeScript and **Tailwind CSS** in the same Laravel application.
 - Laravel handles routes, session authentication, authorization, tenant isolation, persistence, uploads, queues, validation and business logic.
 - Laravel Queues handle invoice work independently; Redis is optional only when useful for queue/cache.
-- OCR.space Free Engine 3 par défaut (texte OCR) ou Mistral OCR sélectionnable (annotation structurée) ; Qwen3.8 27B gratuit via OpenRouter pour structurer le texte selon le schéma JSON strict (raisonnement désactivé, 2 500 tokens de sortie par défaut, configurable de 2 000 à 3 000), et OpenRouter `openrouter/free` pour les propositions comptables.
+- OCR.space Free Engine 3 par défaut (texte OCR) ou Mistral OCR sélectionnable (annotation structurée) ; extraction configurable et séparée de l’OCR/proposition, avec `qwen/qwen-2.5-7b-instruct:free` par défaut pour le texte OCR et JSON Schema strict (2 500 tokens de sortie par défaut, configurable de 2 000 à 3 000) ; OpenRouter `openrouter/free` reste réservé aux propositions comptables.
 - Controllers, Services, Models, DTOs, Form Requests, Jobs, Policies and React pages/components have distinct responsibilities.
 - External AI providers are isolated behind replaceable service contracts. API calls do not live in controllers. Errors, timeouts and invalid responses are handled explicitly.
 - Use pagination, scoped queries, eager loading, selected columns, indexes and useful cache only where appropriate. Avoid unnecessary packages and abstractions.

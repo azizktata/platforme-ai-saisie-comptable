@@ -9,6 +9,8 @@ class InvoiceProcessingErrorMessage
         return match ($errorCode) {
             'configuration_missing' => 'La clé API du fournisseur OCR actif n’est pas configurée sur le serveur.',
             'openrouter_configuration_missing' => 'La clé API OpenRouter n’est pas configurée sur le serveur.',
+            'invoice_extraction_provider_unsupported' => 'Le fournisseur d’extraction facture configuré n’est pas pris en charge.',
+            'invoice_extraction_configuration_invalid' => 'Le modèle d’extraction facture n’est pas configuré. Vérifiez les paramètres du serveur.',
             'openrouter_tls_ca_bundle_invalid', 'tls_ca_bundle_invalid' => 'Le bundle de certificats TLS configuré est absent ou illisible.',
             'tls_certificate_verification_failed', 'openrouter_tls_certificate_verification_failed' => 'Échec de vérification TLS. Vérifiez les certificats CA de PHP ou le bundle CA du fournisseur.',
             'provider_file_too_large' => 'Le fichier dépasse la limite de taille du fournisseur OCR actif. Réduisez sa taille puis relancez le traitement.',
@@ -18,7 +20,7 @@ class InvoiceProcessingErrorMessage
             'openrouter_authentication_failed' => 'OpenRouter a refusé l’authentification. Vérifiez la clé API configurée sur le serveur.',
             'configuration_invalid', 'openrouter_configuration_invalid' => 'La configuration du fournisseur actif est invalide. Vérifiez les paramètres du serveur.',
             'provider_rejected_request', 'invalid_provider_response', 'invalid_structured_annotation' => 'La réponse OCR n’a pas pu être validée. Le document peut être vérifié ou relancé.',
-            'openrouter_rejected_request', 'openrouter_invalid_response', 'openrouter_invalid_json_response', 'openrouter_invalid_invoice_data', 'openrouter_invalid_accounting_proposal', 'openrouter_response_truncated' => 'La réponse OpenRouter n’a pas pu être validée. Vérifiez le document puis relancez cette étape.',
+            'openrouter_rejected_request', 'openrouter_invalid_response', 'openrouter_invalid_json_response', 'openrouter_invalid_invoice_data', 'openrouter_invalid_accounting_proposal', 'openrouter_response_truncated', 'openrouter_safety_response', 'openrouter_unsupported_finish_reason' => 'La réponse OpenRouter n’a pas pu être validée. Vérifiez le document puis relancez cette étape.',
             'openrouter_input_too_large' => 'Le texte OCR dépasse la limite configurée pour l’analyse OpenRouter.',
             'accounting_context_incomplete' => 'Ajoutez un journal et un compte comptable actifs à la société avant de relancer l’analyse.',
             'source_file_missing', 'source_file_unreadable', 'source_file_invalid_path' => 'Le document privé n’a pas pu être lu pour le traitement.',

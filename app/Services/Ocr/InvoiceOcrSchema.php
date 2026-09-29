@@ -12,10 +12,17 @@ class InvoiceOcrSchema
         'supplier_name' => ['max' => 255, 'description' => 'Fournisseur tel qu’imprimé sur la facture.'],
         'supplier_tax_identifier' => ['max' => 80, 'description' => 'Matricule fiscal ou identifiant du fournisseur.'],
         'supplier_address' => ['max' => 10000, 'description' => 'Adresse du fournisseur.'],
+        'supplier_phone' => ['max' => 50, 'description' => 'Téléphone du fournisseur.'],
+        'supplier_mobile' => ['max' => 50, 'description' => 'Téléphone mobile du fournisseur.'],
+        'supplier_email' => ['max' => 255, 'description' => 'Adresse e-mail du fournisseur.'],
         'customer_name' => ['max' => 255, 'description' => 'Nom du client ou de la société facturée.'],
         'customer_tax_identifier' => ['max' => 80, 'description' => 'Identifiant fiscal du client facturé.'],
+        'customer_reference' => ['max' => 120, 'description' => 'Référence du client indiquée sur la facture.'],
+        'customer_address' => ['max' => 10000, 'description' => 'Adresse du client facturé.'],
+        'customer_phone' => ['max' => 50, 'description' => 'Téléphone du client facturé.'],
         'invoice_number' => ['max' => 120, 'description' => 'Numéro ou référence de facture.'],
         'purchase_order_reference' => ['max' => 120, 'description' => 'Référence de commande présente sur le document.'],
+        'payment_method' => ['max' => 120, 'description' => 'Mode de paiement indiqué sur la facture.'],
         'payment_terms' => ['max' => 10000, 'description' => 'Conditions ou échéancier de paiement.'],
         'bank_name' => ['max' => 255, 'description' => 'Nom de la banque indiqué sur la facture.'],
         'bank_account_reference' => ['max' => 190, 'description' => 'RIB, IBAN ou référence bancaire imprimée.'],
@@ -28,13 +35,15 @@ class InvoiceOcrSchema
     ];
 
     private const INVOICE_DECIMAL_FIELDS = [
-        'subtotal' => 'Montant hors taxes avant taxes et retenues.',
+        'subtotal' => 'Total hors taxes indiqué sur la facture.',
+        'total_discount_amount' => 'Remise totale explicitement indiquée sur la facture.',
         'vat_amount' => 'Montant total de TVA, tel qu’imprimé.',
         'fodec_amount' => 'Montant total FODEC, tel qu’imprimé.',
         'other_tax_amount' => 'Autres taxes distinctes du FODEC, si elles sont indiquées.',
         'stamp_amount' => 'Montant du timbre fiscal.',
         'withholding_amount' => 'Montant de la retenue à la source.',
-        'total_amount' => 'Montant TTC ou total à payer, tel qu’imprimé.',
+        'total_amount' => 'Montant TTC indiqué sur la facture.',
+        'net_to_pay_amount' => 'Net à payer indiqué sur la facture, sans le recalculer.',
     ];
 
     private const LINE_TEXT_FIELDS = [
@@ -44,7 +53,8 @@ class InvoiceOcrSchema
 
     private const LINE_DECIMAL_FIELDS = [
         'quantity' => 'Quantité indiquée sur la ligne.',
-        'unit_price' => 'Prix unitaire indiqué sur la ligne.',
+        'unit_price' => 'Prix unitaire hors taxes indiqué sur la ligne.',
+        'discount_amount' => 'Remise indiquée pour cette ligne.',
         'subtotal' => 'Montant hors taxes de la ligne.',
         'vat_amount' => 'Montant de TVA de la ligne.',
         'fodec_amount' => 'Montant FODEC de la ligne.',
@@ -102,7 +112,7 @@ class InvoiceOcrSchema
     public function annotationPrompt(): string
     {
         return <<<'PROMPT'
-Extract only information explicitly visible on this supplier invoice. Return null for any missing, unreadable, or ambiguous value. Copy dates, currency labels, amounts, quantities, and rates as printed; Laravel will normalize and validate them. Do not infer, invent, calculate, sum, or reconcile any value. Preserve printed descriptions and references. Put FODEC in its dedicated fields and use other_tax only for a separate tax. Return an invoice-level VAT or FODEC rate only when one unique global rate is explicitly printed; when rates vary by line, return null at invoice level and preserve the individual line rates. Keep invoice-level totals distinct from line-level amounts. Do not create accounting accounts, journals, or accounting entries.
+Extract only information explicitly visible on this supplier invoice. Return null for any missing, unreadable, or ambiguous value. Copy dates, currency labels, amounts, quantities, rates, and contact details as printed; Laravel will normalize and validate them. Do not infer, invent, calculate, sum, or reconcile any value. Do not interpret isolated numbers as invoice lines unless the OCR clearly associates them with a described line item. Preserve printed descriptions and references. Put FODEC in its dedicated fields and use other_tax only for a separate tax. Return an invoice-level VAT or FODEC rate only when one unique global rate is explicitly printed; when rates vary by line, return null at invoice level and preserve the individual line rates. Keep invoice-level totals distinct from line-level amounts. Do not create accounting accounts, journals, or accounting entries.
 PROMPT;
     }
 

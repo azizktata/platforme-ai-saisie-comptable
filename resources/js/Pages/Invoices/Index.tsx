@@ -3,7 +3,6 @@ import { ArrowDownToLine, FileText, LoaderCircle, RotateCcw, Upload, X } from 'l
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import AppShell from '../../Components/AppShell';
-import InvoiceReviewDialog from '../../Components/InvoiceReviewDialog';
 import type { SharedAuthProps } from '../../types';
 
 type InvoiceSummary = {
@@ -69,7 +68,6 @@ export default function InvoicesIndex({ mode, ocrProvider, maxUploadFileSizeByte
   const [confirmDuplicates, setConfirmDuplicates] = useState(false);
   const [uploadFailures, setUploadFailures] = useState<InvoiceUploadFailure[]>([]);
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<number[]>([]);
-  const [reviewingInvoice, setReviewingInvoice] = useState<{ id: number; tab: 'ocr' | 'invoice' | 'proposal' } | null>(null);
   const invoiceRows = invoices?.data ?? [];
   const hasPendingOcr = invoiceRows.some((invoice) => ['ocr_queued', 'ocr_processing', 'data_extraction', 'accounting_analysis'].includes(invoice.status));
   const reviewableSelectedIds = invoiceRows
@@ -446,12 +444,12 @@ export default function InvoicesIndex({ mode, ocrProvider, maxUploadFileSizeByte
                         </td>
                       )}
                       <td className="min-w-56 px-5 py-3">
-                        <span className="block max-w-72 truncate font-medium text-slate-800" title={invoice.original_filename}>{invoice.original_filename}</span>
+                        <Link href={`/companies/${company.id}/invoices/${invoice.id}`} className="block max-w-72 truncate font-medium text-teal-800 hover:text-teal-950 hover:underline" title={invoice.original_filename}>{invoice.original_filename}</Link>
                         <span className="mt-0.5 block text-xs text-slate-400">{formatFileSize(invoice.size_bytes)} · {formatTimestamp(invoice.created_at)}</span>
                         {!['uploaded', 'ocr_queued', 'ocr_processing'].includes(invoice.status) && (
-                          <button type="button" onClick={() => setReviewingInvoice({ id: invoice.id, tab: 'ocr' })} className="mt-1 text-left text-xs font-semibold text-teal-700 hover:text-teal-900">
+                          <Link href={`/companies/${company.id}/invoices/${invoice.id}#ocr-text`} className="mt-1 inline-block text-xs font-semibold text-teal-700 hover:text-teal-900">
                             Afficher le texte OCR
-                          </button>
+                          </Link>
                         )}
                       </td>
                       <td className="px-5 py-3 text-slate-600">
@@ -487,14 +485,14 @@ export default function InvoicesIndex({ mode, ocrProvider, maxUploadFileSizeByte
                             </button>
                           )}
                           {canUploadInvoices && ['invoice_incomplete', 'data_extraction_failed', 'accounting_analysis_failed', 'proposal_rejected'].includes(invoice.status) && (
-                            <button type="button" onClick={() => setReviewingInvoice({ id: invoice.id, tab: 'invoice' })} className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 px-2.5 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-50">
+                            <Link href={`/companies/${company.id}/invoices/${invoice.id}`} className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 px-2.5 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-50">
                               <FileText size={14} /> Corriger les données
-                            </button>
+                            </Link>
                           )}
                           {canUploadInvoices && invoice.status === 'proposal_ready' && (
-                            <button type="button" onClick={() => setReviewingInvoice({ id: invoice.id, tab: 'proposal' })} className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300 px-2.5 py-1.5 text-xs font-semibold text-emerald-900 hover:bg-emerald-50">
+                            <Link href={`/companies/${company.id}/invoices/${invoice.id}#proposal`} className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300 px-2.5 py-1.5 text-xs font-semibold text-emerald-900 hover:bg-emerald-50">
                               <FileText size={14} /> Vérifier la proposition
-                            </button>
+                            </Link>
                           )}
                           <a href={invoice.download_url} className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-teal-800 hover:border-teal-300 hover:bg-teal-50">
                             <ArrowDownToLine size={14} /> Télécharger
@@ -518,15 +516,6 @@ export default function InvoicesIndex({ mode, ocrProvider, maxUploadFileSizeByte
           </section>
         )}
       </section>
-      {company && reviewingInvoice && (
-        <InvoiceReviewDialog
-          companyId={company.id}
-          invoiceId={reviewingInvoice.id}
-          initialTab={reviewingInvoice.tab}
-          onClose={() => setReviewingInvoice(null)}
-          onChanged={() => router.reload({ only: ['invoices'] })}
-        />
-      )}
     </AppShell>
   );
 }

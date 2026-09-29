@@ -27,6 +27,30 @@ class InvoiceIntakeTest extends TestCase
         config()->set('services.ocr_space.max_file_size_bytes', 1024 * 1024);
     }
 
+    public function test_invoice_review_detail_backfills_new_optional_fields_for_legacy_extractions(): void
+    {
+        Storage::fake('local');
+        $company = Company::factory()->create();
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $invoice = $this->createInvoice($company, 'legacy.pdf', 'invoice_incomplete');
+        $invoice->forceFill([
+            'ocr_data' => [
+                'supplier_name' => 'Fournisseur historique',
+                'invoice_number' => 'LEG-001',
+                'lines' => [['description' => 'Prestation historique']],
+            ],
+        ])->save();
+
+        $this->actingAs($manager)
+            ->get(route('companies.invoices.details', [$company, $invoice]))
+            ->assertOk()
+            ->assertJsonPath('invoice.ocr_data.supplier_name', 'Fournisseur historique')
+            ->assertJsonPath('invoice.ocr_data.customer_name', null)
+            ->assertJsonPath('invoice.ocr_data.total_discount_amount', null)
+            ->assertJsonPath('invoice.ocr_data.lines.0.description', 'Prestation historique')
+            ->assertJsonPath('invoice.ocr_data.lines.0.discount_amount', null);
+    }
+
     public function test_invoice_manager_can_upload_view_and_download_a_private_company_document(): void
     {
         Storage::fake('local');
@@ -62,6 +86,22 @@ class InvoiceIntakeTest extends TestCase
                 ->where('invoices.data.0.original_filename', 'facture.png')
                 ->where('invoices.data.0.status', 'ocr_queued'))
             ->assertDontSee($invoice->file_path);
+
+        $this->actingAs($manager)
+            ->get(route('companies.invoices.show', [$company, $invoice]))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->component('Invoices/Show')
+                ->where('company.id', $company->id)
+                ->where('invoice.id', $invoice->id)
+                ->where('invoice.mime_type', 'image/png')
+                ->where('invoice.preview_url', route('companies.invoices.preview', [$company, $invoice], false))
+                ->where('invoice.download_url', route('companies.invoices.download', [$company, $invoice], false)));
+
+        $preview = $this->actingAs($manager)
+            ->get(route('companies.invoices.preview', [$company, $invoice]));
+        $preview->assertOk()->assertHeader('Content-Type', 'image/png');
+        $this->assertStringStartsWith('inline', (string) $preview->headers->get('Content-Disposition'));
 
         $this->actingAs($manager)
             ->get(route('companies.invoices.download', [$company, $invoice]))
@@ -211,6 +251,12 @@ class InvoiceIntakeTest extends TestCase
         $this->postUpload($otherManager, $otherCompany, $file)->assertCreated();
         $invoice = $otherCompany->invoices()->sole();
 
+        $this->actingAs($manager)
+            ->get(route('companies.invoices.show', [$company, $invoice]))
+            ->assertNotFound();
+        $this->actingAs($manager)
+            ->get(route('companies.invoices.preview', [$company, $invoice]))
+            ->assertNotFound();
         $this->actingAs($manager)
             ->get(route('companies.invoices.download', [$company, $invoice]))
             ->assertNotFound();

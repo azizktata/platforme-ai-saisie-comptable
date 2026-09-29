@@ -38,6 +38,12 @@ Route::middleware('auth')->group(function (): void {
         ->name('companies.invoices.index');
     Route::post('/companies/{company}/invoices/upload', [InvoiceController::class, 'upload'])
         ->name('companies.invoices.upload');
+    Route::get('/companies/{company}/invoices/{invoice}', [InvoiceController::class, 'show'])
+        ->name('companies.invoices.show');
+    Route::get('/companies/{company}/invoices/{invoice}/preview', [InvoiceController::class, 'preview'])
+        ->name('companies.invoices.preview');
+    Route::post('/companies/{company}/invoices/{invoice}/extraction/retry', [InvoiceController::class, 'rerunExtraction'])
+        ->name('companies.invoices.extraction.retry');
     Route::get('/companies/{company}/invoices/{invoice}/details', [InvoiceController::class, 'details'])
         ->name('companies.invoices.details');
     Route::put('/companies/{company}/invoices/{invoice}/extraction', [InvoiceController::class, 'saveExtraction'])

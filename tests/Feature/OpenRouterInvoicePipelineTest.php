@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Contracts\OcrProvider;
+use App\Exceptions\AiProviderException;
 use App\Jobs\AnalyzeAccountingProposal;
 use App\Jobs\ExtractInvoiceData;
 use App\Jobs\ProcessInvoiceOcr;
@@ -41,8 +42,9 @@ class OpenRouterInvoicePipelineTest extends TestCase
         config()->set('services.openrouter.api_key', 'test-openrouter-key');
         config()->set('services.openrouter.endpoint', 'https://openrouter.ai/api/v1/chat/completions');
         config()->set('services.openrouter.model', 'openrouter/free');
-        config()->set('services.openrouter.extraction_model', 'qwen/qwen3.8-27b:free');
-        config()->set('services.openrouter.extraction_max_tokens', 2500);
+        config()->set('services.invoice_extraction.provider', 'openrouter');
+        config()->set('services.invoice_extraction.model', 'qwen/qwen-2.5-7b-instruct:free');
+        config()->set('services.invoice_extraction.max_tokens', 2500);
         config()->set('services.openrouter.timeout', 120);
         config()->set('services.openrouter.ca_bundle', null);
         config()->set('services.openrouter.max_ocr_chars', 100000);
@@ -129,7 +131,7 @@ class OpenRouterInvoicePipelineTest extends TestCase
             $data = $request->data();
             $schemaName = $data['response_format']['json_schema']['name'] ?? null;
             $expectedModel = $schemaName === 'supplier_invoice'
-                ? 'qwen/qwen3.8-27b:free'
+                ? 'qwen/qwen-2.5-7b-instruct:free'
                 : 'openrouter/free';
 
             if ($request->url() !== 'https://openrouter.ai/api/v1/chat/completions'
@@ -139,7 +141,7 @@ class OpenRouterInvoicePipelineTest extends TestCase
             }
 
             if ($schemaName === 'supplier_invoice'
-                && (($data['reasoning']['effort'] ?? null) !== 'none' || ($data['max_tokens'] ?? null) !== 2500)) {
+                && (array_key_exists('reasoning', $data) || ($data['max_tokens'] ?? null) !== 2500)) {
                 return false;
             }
 
@@ -156,7 +158,7 @@ class OpenRouterInvoicePipelineTest extends TestCase
             $systemPrompt = $data['messages'][0]['content'] ?? '';
 
             return $data['response_format'] === $expectedSchema
-                && str_contains($systemPrompt, 'Return only one JSON object')
+                && str_contains($systemPrompt, 'Return only a valid JSON object')
                 && str_contains($systemPrompt, 'Laravel will normalize and validate')
                 && ! array_key_exists('explanation', $expectedSchema['json_schema']['schema']['properties']);
         });
@@ -184,13 +186,16 @@ class OpenRouterInvoicePipelineTest extends TestCase
         $invoiceData['due_date'] = '30-09-2026';
         $invoiceData['currency'] = 'Dinar tunisien';
         $invoiceData['subtotal'] = '1 234,500 TND';
+        $invoiceData['total_discount_amount'] = '0,000';
         $invoiceData['vat_rate'] = '19 %';
         $invoiceData['vat_amount'] = '234,555 TND';
         $invoiceData['fodec_amount'] = '0,000';
         $invoiceData['withholding_amount'] = '0,000';
         $invoiceData['total_amount'] = '1 469,055 TND';
+        $invoiceData['net_to_pay_amount'] = '1 469,055 TND';
         $invoiceData['lines'][0]['quantity'] = '2,000';
         $invoiceData['lines'][0]['unit_price'] = '617,250';
+        $invoiceData['lines'][0]['discount_amount'] = '0,000';
         $invoiceData['lines'][0]['subtotal'] = '1 234,500';
         $invoiceData['lines'][0]['vat_rate'] = '19%';
         $invoiceData['lines'][0]['vat_amount'] = '234,555';
@@ -202,12 +207,174 @@ class OpenRouterInvoicePipelineTest extends TestCase
         $this->assertSame('2026-09-30', $normalized['due_date']);
         $this->assertSame('TND', $normalized['currency']);
         $this->assertSame('1234.500', $normalized['subtotal']);
+        $this->assertSame('0.000', $normalized['total_discount_amount']);
         $this->assertSame('19', $normalized['vat_rate']);
         $this->assertSame('234.555', $normalized['vat_amount']);
         $this->assertSame('1469.055', $normalized['total_amount']);
+        $this->assertSame('1469.055', $normalized['net_to_pay_amount']);
         $this->assertSame('2.000', $normalized['lines'][0]['quantity']);
         $this->assertSame('617.250', $normalized['lines'][0]['unit_price']);
+        $this->assertSame('0.000', $normalized['lines'][0]['discount_amount']);
         $this->assertSame('19', $normalized['lines'][0]['vat_rate']);
+    }
+
+    public function test_invoice_schema_rejects_unsupported_fields(): void
+    {
+        $invoiceData = $this->validInvoiceData();
+        $invoiceData['invented_accounting_decision'] = 'expense';
+
+        $this->expectException(\InvalidArgumentException::class);
+        app(InvoiceOcrSchema::class)->validate($invoiceData);
+    }
+
+    public function test_openrouter_rejects_safety_classifier_and_unsupported_finish_reason(): void
+    {
+        config()->set('services.openrouter.api_key', 'test-openrouter-key');
+        $safetyResponse = $this->openRouterResponse($this->validInvoiceData());
+        $safetyResponse['choices'][0]['finish_reason'] = 'content_filter';
+        $unsupportedResponse = $this->openRouterResponse($this->validInvoiceData());
+        $unsupportedResponse['choices'][0]['finish_reason'] = 'tool_calls';
+
+        $responses = [$safetyResponse, $unsupportedResponse];
+        $responseIndex = 0;
+        Http::fake([
+            'https://openrouter.ai/api/v1/chat/completions' => function (ClientRequest $request) use (&$responses, &$responseIndex) {
+                return Http::response($responses[$responseIndex++] ?? []);
+            },
+        ]);
+
+        $client = app(\App\Services\OpenRouter\OpenRouterClient::class);
+
+        foreach (['openrouter_safety_response', 'openrouter_unsupported_finish_reason'] as $expectedCode) {
+            try {
+                $client->completeJson([], app(InvoiceOcrSchema::class)->responseFormat(), model: 'qwen/qwen-2.5-7b-instruct:free');
+                $this->fail('OpenRouter should reject unsupported completion output.');
+            } catch (AiProviderException $exception) {
+                $this->assertSame($expectedCode, $exception->errorCode);
+            }
+        }
+    }
+
+    public function test_rerun_extraction_uses_saved_ocr_text_without_restarting_ocr(): void
+    {
+        Storage::fake('local');
+        Queue::fake();
+        $company = Company::factory()->create();
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $context = $this->seedAccountingContext($company);
+        $invoice = $this->queuedInvoice($company, 'proposal_ready');
+        $invoiceData = app(InvoiceOcrSchema::class)->validate($this->validInvoiceData());
+        app(InvoiceDataPersistence::class)->store($invoice, $invoiceData);
+        $previousProposal = $this->createProposal($company, $invoice, $context);
+        $rawOcrResponse = ['ParsedResults' => [['ParsedText' => 'Existing OCR text']]];
+        $invoice->forceFill([
+            'ocr_text' => 'Existing OCR text',
+            'ocr_response' => $rawOcrResponse,
+            'extraction_model' => 'previous/model',
+        ])->save();
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.extraction.retry', [$company, $invoice]))
+            ->assertRedirect();
+
+        $invoice->refresh();
+        $this->assertSame('data_extraction', $invoice->status);
+        $this->assertSame('Existing OCR text', $invoice->ocr_text);
+        $this->assertSame($rawOcrResponse, $invoice->ocr_response);
+        $this->assertSame($invoiceData, $invoice->ocr_data);
+        $this->assertSame('previous/model', $invoice->extraction_model);
+        $this->assertSame('ready', $previousProposal->fresh()->status);
+        Queue::assertPushed(ExtractInvoiceData::class, fn (ExtractInvoiceData $job): bool => $job->invoiceId === $invoice->id && $job->companyId === $company->id);
+        Queue::assertNotPushed(ProcessInvoiceOcr::class);
+        Queue::assertNotPushed(AnalyzeAccountingProposal::class);
+
+        $updatedInvoiceData = $this->validInvoiceData();
+        $updatedInvoiceData['description'] = 'Description issue de la nouvelle extraction';
+        Http::fake([
+            'https://openrouter.ai/api/v1/chat/completions' => Http::response($this->openRouterResponse($updatedInvoiceData)),
+        ]);
+        $this->runExtraction($invoice->fresh());
+
+        $invoice->refresh();
+        $this->assertSame('accounting_analysis', $invoice->status);
+        $this->assertSame('Description issue de la nouvelle extraction', $invoice->ocr_data['description']);
+        $this->assertSame('superseded', $previousProposal->fresh()->status);
+        Http::assertSent(fn (ClientRequest $request): bool => str_contains(
+            $request->data()['messages'][1]['content'] ?? '',
+            'Existing OCR text',
+        ));
+        Queue::assertPushed(AnalyzeAccountingProposal::class);
+    }
+
+    public function test_failed_rerun_keeps_previous_valid_extraction_and_rejects_safety_text(): void
+    {
+        Storage::fake('local');
+        Queue::fake();
+        $company = Company::factory()->create();
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $context = $this->seedAccountingContext($company);
+        $invoice = $this->queuedInvoice($company, 'data_extraction_failed');
+        $invoiceData = app(InvoiceOcrSchema::class)->validate($this->validInvoiceData());
+        app(InvoiceDataPersistence::class)->store($invoice, $invoiceData);
+        $previousProposal = $this->createProposal($company, $invoice, $context);
+        $rawOcrResponse = ['ParsedResults' => [['ParsedText' => 'Existing OCR text']]];
+        $previousExtractionResponse = ['choices' => [['message' => ['content' => 'previous valid JSON']]]];
+        $invoice->forceFill([
+            'ocr_text' => 'Existing OCR text',
+            'ocr_response' => $rawOcrResponse,
+            'extraction_response' => $previousExtractionResponse,
+            'extraction_model' => 'previous/model',
+        ])->save();
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.extraction.retry', [$company, $invoice]))
+            ->assertRedirect();
+
+        Http::fake([
+            'https://openrouter.ai/api/v1/chat/completions' => Http::response([
+                'id' => 'gen-safety',
+                'model' => 'qwen/qwen-2.5-7b-instruct:free',
+                'choices' => [[
+                    'index' => 0,
+                    'finish_reason' => 'stop',
+                    'message' => ['role' => 'assistant', 'content' => 'User Safety: safe'],
+                ]],
+                'usage' => ['prompt_tokens' => 10, 'completion_tokens' => 4, 'total_tokens' => 14],
+            ]),
+        ]);
+        $this->runExtraction($invoice->fresh());
+
+        $invoice->refresh();
+        $this->assertSame('data_extraction_failed', $invoice->status);
+        $this->assertSame($invoiceData, $invoice->ocr_data);
+        $this->assertSame('Fournisseur Démo', $invoice->supplier_name);
+        $this->assertSame($rawOcrResponse, $invoice->ocr_response);
+        $this->assertSame('Existing OCR text', $invoice->ocr_text);
+        $this->assertSame('previous/model', $invoice->extraction_model);
+        $this->assertSame('openrouter_safety_response', $invoice->ocr_error_code);
+        $this->assertSame($previousExtractionResponse, $invoice->extraction_response);
+        $this->assertSame('ready', $previousProposal->fresh()->status);
+        Queue::assertNotPushed(ProcessInvoiceOcr::class);
+        Queue::assertNotPushed(AnalyzeAccountingProposal::class);
+    }
+
+    public function test_rerun_extraction_requires_existing_ocr_text(): void
+    {
+        Storage::fake('local');
+        Queue::fake();
+        $company = Company::factory()->create();
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $invoice = $this->queuedInvoice($company, 'ocr_failed');
+
+        $this->actingAs($manager)
+            ->from(route('invoices.index', ['company_id' => $company->id]))
+            ->post(route('companies.invoices.extraction.retry', [$company, $invoice]))
+            ->assertRedirect(route('invoices.index', ['company_id' => $company->id]))
+            ->assertSessionHasErrors('extraction');
+
+        $this->assertSame('ocr_failed', $invoice->fresh()->status);
+        Queue::assertNotPushed(ExtractInvoiceData::class);
+        Queue::assertNotPushed(ProcessInvoiceOcr::class);
     }
 
     public function test_openrouter_extraction_error_keeps_the_raw_ocr_response_and_text_intact(): void
@@ -540,10 +707,17 @@ class OpenRouterInvoicePipelineTest extends TestCase
             'supplier_name' => 'Fournisseur Démo',
             'supplier_tax_identifier' => '1234567/A/B/000',
             'supplier_address' => 'Tunis',
+            'supplier_phone' => '+216 71 000 000',
+            'supplier_mobile' => null,
+            'supplier_email' => 'facturation@example.test',
             'customer_name' => 'Société Démo',
             'customer_tax_identifier' => null,
+            'customer_reference' => null,
+            'customer_address' => 'Tunis',
+            'customer_phone' => null,
             'invoice_number' => 'FAC-2026-001',
             'purchase_order_reference' => null,
+            'payment_method' => null,
             'payment_terms' => null,
             'bank_name' => null,
             'bank_account_reference' => null,
@@ -554,6 +728,7 @@ class OpenRouterInvoicePipelineTest extends TestCase
             'vat_rate' => '19.000',
             'fodec_rate' => '0.000',
             'subtotal' => '100.000',
+            'total_discount_amount' => '0.000',
             'vat_amount' => '19.000',
             'fodec_amount' => '0.000',
             'other_tax_amount' => '0.000',
@@ -561,11 +736,13 @@ class OpenRouterInvoicePipelineTest extends TestCase
             'withholding_rate' => null,
             'withholding_amount' => '0.000',
             'total_amount' => '119.000',
+            'net_to_pay_amount' => '119.000',
             'lines' => [[
                 'reference' => 'SVC-1',
                 'description' => 'Prestation informatique',
                 'quantity' => '2.000',
                 'unit_price' => '50.000',
+                'discount_amount' => '0.000',
                 'subtotal' => '100.000',
                 'vat_amount' => '19.000',
                 'fodec_amount' => '0.000',

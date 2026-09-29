@@ -1,6 +1,6 @@
 # Plateforme AI de saisie comptable automatisée
 
-Application de traitement de factures fournisseurs pour cabinets gérant plusieurs sociétés. Le cahier des charges client est la source de vérité : [`docs/requirements.md`](docs/requirements.md). La dernière décision pipeline est OCR.space Free Engine 3 par défaut, Qwen3.8 27B gratuit avec raisonnement désactivé pour structurer la transcription via OpenRouter, OpenRouter `openrouter/free` pour l’analyse comptable, et Mistral OCR comme fournisseur sélectionnable.
+Application de traitement de factures fournisseurs pour cabinets gérant plusieurs sociétés. Le cahier des charges client est la source de vérité : [`docs/requirements.md`](docs/requirements.md). La décision pipeline est OCR.space Free Engine 3 par défaut, le modèle OpenRouter configurable `qwen/qwen-2.5-7b-instruct:free` pour convertir le texte OCR en JSON facture, `openrouter/free` pour l’analyse comptable, et Mistral OCR comme fournisseur sélectionnable.
 
 ## État d’implémentation
 
@@ -38,9 +38,10 @@ OCR_SPACE_API_KEY=...
 OCR_SPACE_ENGINE=3
 
 # Structuration du texte OCR.space et proposition comptable
+INVOICE_EXTRACTION_PROVIDER=openrouter
 OPENROUTER_API_KEY=...
 OPENROUTER_MODEL=openrouter/free
-OPENROUTER_EXTRACTION_MODEL=qwen/qwen3.8-27b:free
+OPENROUTER_EXTRACTION_MODEL=qwen/qwen-2.5-7b-instruct:free
 OPENROUTER_EXTRACTION_MAX_TOKENS=2500
 OPENROUTER_ENDPOINT=https://openrouter.ai/api/v1/chat/completions
 OPENROUTER_TIMEOUT=120
@@ -51,7 +52,7 @@ OPENROUTER_MAX_OCR_CHARS=100000
 # MISTRAL_API_KEY=...
 ```
 
-L’extraction utilise par défaut le modèle gratuit Qwen3.8 27B, qui prend en charge les sorties structurées ; `reasoning.effort=none` désactive son mode de réflexion et la limite de sortie est de 2 500 tokens (configurable de 2 000 à 3 000). Le modèle est configurable via `OPENROUTER_EXTRACTION_MODEL`. Le schéma JSON strict est transmis à OpenRouter ; Laravel normalise et valide les dates, devises et montants avant persistance. `openrouter/free` reste le modèle par défaut de l’analyse comptable, son modèle réellement retourné étant conservé pour audit. Les modèles gratuits et leur disponibilité peuvent changer. OCR.space Free limite un fichier à 1 Mo et les PDF à trois pages. Mistral reste disponible via `OCR_PROVIDER=mistral` ; son annotation structurée évite l’étape de structuration OpenRouter, mais la proposition comptable utilise OpenRouter.
+L’extraction facture utilise par défaut `qwen/qwen-2.5-7b-instruct:free`, configuré séparément de l’OCR et des propositions comptables par `INVOICE_EXTRACTION_PROVIDER` et `OPENROUTER_EXTRACTION_MODEL`. Le service envoie le JSON Schema strict et exige uniquement le JSON ; il n’ajoute aucun champ de raisonnement. La sortie est plafonnée à 2 500 tokens (configurable de 2 000 à 3 000), puis Laravel normalise et valide les valeurs avant persistance. Une réponse invalide n’écrase pas les données facture déjà valides. `openrouter/free` reste le modèle des propositions comptables. Les modèles gratuits et leur disponibilité peuvent changer. OCR.space Free limite un fichier à 1 Mo et les PDF à trois pages. Mistral reste disponible via `OCR_PROVIDER=mistral` ; son annotation structurée évite l’étape de structuration OpenRouter, mais la proposition comptable utilise OpenRouter.
 
 Démarrez un worker dans un terminal distinct :
 
@@ -88,11 +89,11 @@ Le lien Factures ouvre `/invoices`, qui présélectionne la première société 
 
 ### Analyse et validation humaine (Phase 5)
 
-L’extraction facture et la proposition comptable sont deux étapes OpenRouter distinctes pour OCR.space. Les données requises sont fournisseur, numéro, date, devise, total et description ou ligne décrite. Si une donnée requise manque, l’analyse comptable ne démarre pas ; le gestionnaire peut corriger la facture dans le dialogue. Une complétude valide déclenche automatiquement l’analyse sur le contexte limité à la société : profil, référentiels actifs et écritures récentes de cette société.
+L’extraction facture et la proposition comptable sont deux étapes OpenRouter distinctes pour OCR.space. Les données requises sont fournisseur, numéro, date, devise, total et description ou ligne décrite. Si une donnée requise manque, l’analyse comptable ne démarre pas ; le gestionnaire peut corriger la facture dans la page de revue dédiée. Une complétude valide déclenche automatiquement l’analyse sur le contexte limité à la société : profil, référentiels actifs et écritures récentes de cette société.
 
 La proposition et ses lignes sont persistées avec avertissements, réponse brute, modèle et usage. Les corrections sont horodatées ; si les données facture changent, une nouvelle version de proposition est créée sans effacer les réponses brutes précédentes. Le gestionnaire peut corriger le journal, les comptes, le tiers, l’axe, les libellés et les montants, ou rejeter sans écriture. Le serveur revalide les références société, l’équilibre et le rapprochement au total avant validation. Seule l’action explicite « Valider et créer l’écriture » crée une écriture liée et unique. Aucun export Sage n’est effectué.
 
-Les détails sont chargés à la demande dans une boîte de dialogue privée : texte OCR, données structurées, avertissements et proposition. Les utilisateurs autorisés en lecture peuvent consulter ; seuls les administrateurs de cabinet/gestionnaires affectés peuvent corriger et valider. Les mutations et appels fournisseurs disposent de retours toast.
+La liste ouvre `/companies/{company}/invoices/{invoice}`, une page dédiée. Sur desktop, le PDF/image original dans `InvoiceDocumentViewer` et `InvoiceReviewPanel` défilent indépendamment côte à côte ; ils s’empilent sur petit écran. Le viewer propose zoom, ajustement, rotation des images, plein écran et navigation PDF ; la rotation native PDF dépend du navigateur. Le panneau organise les champs fournisseur, client, métadonnées, lignes, totaux et banque, tout en conservant les actions de proposition. L’aperçu et les détails restent privés et tenant-scoped ; les utilisateurs autorisés peuvent consulter, seuls les gestionnaires affectés/administrateurs peuvent modifier et valider. Les actions donnent des retours toast.
 
 ## Vérifications
 
@@ -119,7 +120,7 @@ app/Jobs/                     OCR, extraction et analyse comptable par facture
 app/Http/Controllers/         Auth, cabinet, référentiels, factures et propositions
 app/Http/Requests/            Validation serveur des imports et corrections
 resources/js/Pages/Invoices/  Workspace Factures
-resources/js/Components/      Coquille et dialogue de revue facture
+resources/js/Components/      Coquille, InvoiceReviewPanel et InvoiceDocumentViewer
 routes/web.php                Routes web authentifiées
 database/migrations/          Schémas et états Phase 1–5
 docs/requirements.md          Cahier des charges mis à jour

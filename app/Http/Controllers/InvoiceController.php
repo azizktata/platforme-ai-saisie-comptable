@@ -79,6 +79,24 @@ class InvoiceController extends Controller
         ]);
     }
 
+    public function show(Company $company, Invoice $invoice): Response
+    {
+        $this->authorize('view', $company);
+        abort_unless((int) $invoice->company_id === (int) $company->id, 404);
+
+        return Inertia::render('Invoices/Show', [
+            'company' => $this->companySummary($company),
+            'invoice' => [
+                'id' => $invoice->id,
+                'original_filename' => $invoice->original_filename,
+                'mime_type' => $invoice->mime_type,
+                'preview_url' => route('companies.invoices.preview', [$company, $invoice], false),
+                'download_url' => route('companies.invoices.download', [$company, $invoice], false),
+            ],
+            'back_url' => route('invoices.index', ['company_id' => $company->id], false),
+        ]);
+    }
+
     public function upload(
         UploadInvoiceFileRequest $request,
         Company $company,
@@ -233,6 +251,60 @@ class InvoiceController extends Controller
             ->with('success', 'L’étape du traitement a été relancée.');
     }
 
+    public function rerunExtraction(Company $company, Invoice $invoice): RedirectResponse
+    {
+        $this->authorize('manageInvoices', $company);
+        abort_unless((int) $invoice->company_id === (int) $company->id, 404);
+
+        $canExtract = DB::transaction(function () use ($company, $invoice): bool {
+            $lockedInvoice = $company->invoices()
+                ->whereKey($invoice->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if (trim((string) $lockedInvoice->ocr_text) === '') {
+                throw ValidationException::withMessages([
+                    'extraction' => 'Aucun texte OCR n’est disponible. Lancez d’abord le traitement OCR du document.',
+                ]);
+            }
+
+            if (in_array($lockedInvoice->status, [
+                'ocr_queued',
+                'ocr_processing',
+                'data_extraction',
+                'accounting_analysis',
+                'accounting_validated',
+            ], true) || $lockedInvoice->journalEntry()->exists()) {
+                throw ValidationException::withMessages([
+                    'extraction' => 'L’extraction ne peut pas être relancée pendant un traitement en cours ou après validation comptable.',
+                ]);
+            }
+
+            $lockedInvoice->forceFill([
+                'status' => 'data_extraction',
+                'ocr_failed_at' => null,
+                'ocr_error_code' => null,
+                'ocr_error_message' => null,
+            ])->save();
+
+            return true;
+        });
+
+        if (! $canExtract) {
+            return back()->withErrors(['extraction' => 'L’extraction n’a pas pu être planifiée.']);
+        }
+
+        try {
+            ExtractInvoiceData::dispatch($invoice->id, $company->id);
+        } catch (\Throwable) {
+            $this->markStageQueueFailure($company, $invoice, 'data_extraction');
+
+            return back()->withErrors(['extraction' => 'L’extraction n’a pas pu être planifiée. Vous pouvez réessayer.']);
+        }
+
+        return back()->with('success', 'L’extraction a été relancée à partir du texte OCR existant.');
+    }
+
     public function details(Company $company, Invoice $invoice, InvoiceOcrSchema $schema): JsonResponse
     {
         $this->authorize('view', $company);
@@ -248,11 +320,14 @@ class InvoiceController extends Controller
                 'id' => $invoice->id,
                 'status' => $invoice->status,
                 'original_filename' => $invoice->original_filename,
-                'ocr_text' => $invoice->ocr_text ?? ($invoice->extraction_model === null && str_starts_with((string) $invoice->ocr_model, 'ocr.space-engine-') ? $invoice->description : null),
+                'invoice_number' => $invoice->invoice_number,
+                'ocr_text' => $invoice->ocr_text,
+                'ocr_display_text' => $invoice->ocr_text ?? ($invoice->extraction_model === null && str_starts_with((string) $invoice->ocr_model, 'ocr.space-engine-') ? $invoice->description : null),
                 'ocr_data' => $invoiceData,
                 'ocr_warnings' => $invoice->ocr_warnings ?? [],
                 'ocr_error_message' => $invoice->ocr_error_message,
                 'ocr_model' => $invoice->ocr_model,
+                'extraction_provider' => (string) config('services.invoice_extraction.provider', 'openrouter'),
                 'extraction_model' => $invoice->extraction_model,
                 'extraction_corrected_at' => $invoice->extraction_corrected_at?->toIso8601String(),
             ],
@@ -326,6 +401,7 @@ class InvoiceController extends Controller
             $lockedInvoice = $company->invoices()->whereKey($invoice->id)->lockForUpdate()->firstOrFail();
 
             if (! in_array($lockedInvoice->status, [
+                'ocr_completed',
                 'invoice_incomplete',
                 'data_extraction_failed',
                 'accounting_analysis_failed',
@@ -414,6 +490,25 @@ class InvoiceController extends Controller
         });
 
         return to_route('invoices.index', ['company_id' => $company->id]);
+    }
+
+    public function preview(Company $company, Invoice $invoice): StreamedResponse
+    {
+        $this->authorize('view', $company);
+        abort_unless((int) $invoice->company_id === (int) $company->id, 404);
+        abort_unless($invoice->storage_disk === 'local', 404);
+        abort_unless(Storage::disk('local')->exists($invoice->file_path), 404);
+
+        return Storage::disk('local')->response(
+            $invoice->file_path,
+            $invoice->original_filename,
+            [
+                'Content-Type' => $invoice->mime_type,
+                'X-Content-Type-Options' => 'nosniff',
+                'Cache-Control' => 'private, no-store',
+            ],
+            'inline',
+        );
     }
 
     public function download(Company $company, Invoice $invoice): StreamedResponse
@@ -505,7 +600,7 @@ class InvoiceController extends Controller
                 'ocr_warnings' => $invoice->ocr_warnings ?? [],
                 'ocr_reviewed_at' => $invoice->ocr_reviewed_at?->toIso8601String(),
                 'created_at' => $invoice->created_at->toIso8601String(),
-                'download_url' => route('companies.invoices.download', [$company, $invoice]),
+                'download_url' => route('companies.invoices.download', [$company, $invoice], false),
             ]);
     }
 
@@ -557,7 +652,31 @@ class InvoiceController extends Controller
     private function currentInvoiceData(Invoice $invoice, InvoiceOcrSchema $schema): array
     {
         if (is_array($invoice->ocr_data) && isset($invoice->ocr_data['lines']) && is_array($invoice->ocr_data['lines'])) {
-            return $invoice->ocr_data;
+            $emptyData = $schema->emptyAnnotation();
+            $data = array_replace($emptyData, array_intersect_key($invoice->ocr_data, $emptyData));
+            $lineFields = [
+                'reference' => null,
+                'description' => null,
+                'quantity' => null,
+                'unit_price' => null,
+                'discount_amount' => null,
+                'subtotal' => null,
+                'vat_rate' => null,
+                'vat_amount' => null,
+                'fodec_rate' => null,
+                'fodec_amount' => null,
+                'other_tax_amount' => null,
+                'total_amount' => null,
+            ];
+            $data['lines'] = array_values(array_map(
+                fn ($line): array => array_replace(
+                    $lineFields,
+                    is_array($line) ? array_intersect_key($line, $lineFields) : [],
+                ),
+                $invoice->ocr_data['lines'],
+            ));
+
+            return $data;
         }
 
         $data = $schema->emptyAnnotation();
@@ -574,6 +693,7 @@ class InvoiceController extends Controller
             } elseif ($value !== null && in_array($field, [
                 'vat_rate', 'fodec_rate', 'subtotal', 'vat_amount', 'fodec_amount',
                 'other_tax_amount', 'stamp_amount', 'withholding_rate', 'withholding_amount', 'total_amount',
+                'total_discount_amount', 'net_to_pay_amount',
             ], true)) {
                 $value = (string) $value;
             }
@@ -586,6 +706,7 @@ class InvoiceController extends Controller
             'description' => $line->description,
             'quantity' => $line->quantity,
             'unit_price' => $line->unit_price,
+            'discount_amount' => $line->discount_amount,
             'subtotal' => $line->subtotal,
             'vat_rate' => $line->vat_rate,
             'vat_amount' => $line->vat_amount,

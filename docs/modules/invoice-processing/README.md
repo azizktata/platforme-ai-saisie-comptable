@@ -1,8 +1,12 @@
-# Factures — intake, OCR et proposition comptable (Phases 3–5)
+# Factures — intake, extraction, revue et proposition comptable
 
-## Pré-requis et configuration IA
+Ce module couvre l’import sécurisé, le workflow OCR/extraction, la revue humaine et la proposition comptable. Il est implémenté avec Laravel, Inertia, React et TypeScript ; les fichiers originaux restent dans un disque privé et les appels fournisseur restent côté serveur.
 
-OCR.space Engine 3 est le fournisseur OCR par défaut ; sa clé reste côté serveur :
+## Configuration
+
+### OCR
+
+OCR.space Engine 3 Free est le défaut. Configurer la clé côté serveur dans `.env` :
 
 ```dotenv
 OCR_PROVIDER=ocr_space
@@ -10,15 +14,18 @@ OCR_SPACE_API_KEY=...
 OCR_SPACE_ENGINE=3
 ```
 
-Mistral reste disponible pour une utilisation future/alternative : `OCR_PROVIDER=mistral` et `MISTRAL_API_KEY=...`. Mistral fournit des données structurées ; dans ce chemin l’étape OpenRouter de structuration est sautée, mais OpenRouter reste le fournisseur de propositions comptables.
+Mistral reste disponible comme fournisseur OCR/annotation alternative : `OCR_PROVIDER=mistral`, `MISTRAL_API_KEY=...`. Les données structurées de Mistral passent par le même contrat/normalisateur Laravel ; cette voie ne lance pas l’appel d’extraction OpenRouter. Les propositions comptables continuent à utiliser OpenRouter.
 
-Pour OCR.space et les propositions comptables, configurer OpenRouter :
+### Extraction de facture et proposition comptable
+
+L’extraction de texte OCR est indépendante du fournisseur OCR et de la proposition comptable :
 
 ```dotenv
+INVOICE_EXTRACTION_PROVIDER=openrouter
 OPENROUTER_API_KEY=...
-OPENROUTER_MODEL=openrouter/free
-OPENROUTER_EXTRACTION_MODEL=qwen/qwen3.8-27b:free
+OPENROUTER_EXTRACTION_MODEL=qwen/qwen-2.5-7b-instruct:free
 OPENROUTER_EXTRACTION_MAX_TOKENS=2500
+OPENROUTER_MODEL=openrouter/free
 OPENROUTER_ENDPOINT=https://openrouter.ai/api/v1/chat/completions
 OPENROUTER_TIMEOUT=120
 OPENROUTER_MAX_OCR_CHARS=100000
@@ -27,58 +34,84 @@ OPENROUTER_APP_NAME=ComptaFlow
 OPENROUTER_CA_BUNDLE=
 ```
 
-L’extraction utilise par défaut Qwen3.8 27B gratuit, avec `reasoning.effort=none`, JSON Schema strict et 2 500 tokens de sortie (configurable entre 2 000 et 3 000). Le modèle d’extraction est configurable ; Laravel normalise et valide les valeurs OCR. Les propositions comptables utilisent toujours `openrouter/free`, dont le modèle réellement renvoyé varie et est conservé en audit. Les documents quittent le stockage privé uniquement dans la requête du fournisseur configuré. Ne désactivez jamais la validation TLS et ne mettez pas les clés dans le navigateur ou le dépôt.
+Le modèle par défaut est exactement `qwen/qwen-2.5-7b-instruct:free` ; il est configurable via `OPENROUTER_EXTRACTION_MODEL`, pas codé dans l’interface. `INVOICE_EXTRACTION_PROVIDER` et `OPENROUTER_EXTRACTION_MODEL` sont configurés sous `services.invoice_extraction`. La proposition comptable est configurée séparément par `OPENROUTER_MODEL=openrouter/free`.
 
-Appliquer les migrations puis faire tourner le worker (timeouts OCR/LLM jusqu’à 210 secondes, `DB_QUEUE_RETRY_AFTER` doit rester supérieur) :
+`InvoiceDataExtractionService` transmet un JSON Schema strict et demande uniquement le JSON, sans ajout de raisonnement, d’explication, de champ inventé, de calcul ou de décision comptable. La validation rejette les propriétés inconnues, les valeurs mal formées, les réponses tronquées et les réponses safety-classifier. La limite par défaut de 2 500 tokens est bornée/configurable entre 2 000 et 3 000. Laravel normalise les dates, devises, taux et montants ; les validations déterministes de complétude et totaux sont séparées du modèle. Aucune valeur manquante n’est calculée. Une erreur d’extraction ne remplace pas les dernières données facture, les lignes valides ni la proposition prête précédente.
+
+Les clés fournisseur ne doivent pas être exposées au navigateur ni consignées dans les logs. Conserver la validation TLS activée et configurer `OPENROUTER_CA_BUNDLE`/les CA des fournisseurs uniquement si l’environnement l’exige. OCR.space Free limite un fichier à 1 Mo et un PDF à trois pages.
+
+## Démarrage
+
+Appliquer les migrations puis exécuter un worker sur la file utilisée par les jobs d’intake et d’IA :
 
 ```bash
 php artisan migrate
 php artisan queue:work database --queue=ocr --tries=3 --timeout=210
 ```
 
-## Données et architecture
+`DB_QUEUE_RETRY_AFTER` doit être supérieur au timeout du worker. Le frontend est inclus dans le build principal (`npm run build`).
 
-- `Invoice` et `InvoiceLine` portent les champs normalisés et lignes.
-- `InvoiceOcrResult` transporte réponse brute, structure optionnelle, modèle, usage, transcription et indicateur de données structurées. OCR.space précise qu’il ne produit pas de JSON facture ; Mistral précise qu’il le produit.
-- `ProcessInvoiceOcr` : OCR et transitions `ocr_queued` → `ocr_processing` → extraction ou analyse.
-- `ocr_text` / `ocr_response` : transcription lisible et réponse fournisseur complète OCR.
-- `ExtractInvoiceData` / `InvoiceDataExtractionService` : OpenRouter `json_schema` strict et validation `InvoiceOcrSchema`; audit séparé dans `extraction_response`, `extraction_model`, `extraction_usage`.
-- `InvoiceDataCompletenessChecker` bloque les données obligatoires manquantes ; `InvoiceDataPersistence` synchronise JSON, colonnes et lignes.
-- `AnalyzeAccountingProposal` / `AccountingProposalService` : contexte construit depuis la société de la facture (profil, comptes, journaux, tiers, axes et 20 écritures récentes), réponses schema strict et codes à choix bornés.
-- `AccountingProposal` / `AccountingProposalLine` gardent la réponse brute, modèle, usage, lignes, avertissements et décision de revue.
-- `AccountingProposalController` revalide la portée société des références et n’écrit un `JournalEntry` qu’après approbation humaine. La clé `journal_entries.invoice_id` est unique.
+## Workflow et validation
 
-Les migrations Phase 5 sont `2026_09_29_000001_add_llm_audit_and_invoice_journal_link`, `...000002_create_accounting_proposals_table` et `...000003_create_accounting_proposal_lines_table`.
+1. Un utilisateur autorisé choisit une société accessible et importe un PDF/JPG/JPEG/PNG. Chaque fichier est enregistré dans `companies/{company}/invoices`, dédoublonné par SHA-256 dans la société et traité indépendamment.
+2. `ProcessInvoiceOcr` produit `ocr_text` et `ocr_response` avec OCR.space, ou une annotation structurée Mistral. OCR et extraction disposent de statuts, compteurs, modèles, dates et erreurs dédiés.
+3. Avec OCR.space, `ExtractInvoiceData` structure uniquement le texte OCR sauvegardé. Le résultat validé est conservé séparément et synchronisé dans `ocr_data`, les colonnes `invoices` et `invoice_lines`.
+4. `InvoiceDataCompletenessChecker` bloque l’analyse si le fournisseur, numéro, date, devise, total ou description/ligne nécessaire manque. `InvoiceTotalsConsistencyChecker` signale les incohérences sans changer les montants ni inventer de valeurs.
+5. Une facture complète lance `AnalyzeAccountingProposal` avec les référentiels et l’historique limité à la société liée. La proposition est révisable et auditable. Le serveur revalide comptes, journaux, tiers, axes, équilibre et rapprochement avant approbation.
+6. Un gestionnaire peut enregistrer la facture/proposition, rejeter ou approuver. Le rejet ne crée aucune écriture ; seule l’approbation explicite crée une écriture liée, unique par facture. L’export réel Sage est hors périmètre.
 
-## Parcours HTTP et autorisations
+Pour relancer la structuration sans refaire OCR, `POST /companies/{company}/invoices/{invoice}/extraction/retry` reprend le `ocr_text` conservé. La route exige une transcription disponible, interdit un traitement actif ou une facture déjà journalisée, puis ne dispatch que `ExtractInvoiceData`. `POST .../ocr/retry` est l’action séparée pour relancer OCR. En cas d’échec d’extraction, la transcription, les lignes et les dernières valeurs normalisées valides restent intactes ; le statut/message d’erreur permet une correction ou une nouvelle tentative.
 
-- `GET /invoices` : workspace global, première société accessible préselectionnée ; toutes les actions revérifient l’accès.
-- `GET /companies/{company}/invoices` : historique complet de la société.
-- `POST /companies/{company}/invoices/upload` : import privé un fichier à la fois, lots UI séquentiels, doublon par hash société.
-- `GET /companies/{company}/invoices/{invoice}/details` : données et transcription OCR affichées dans le dialogue, autorisation lecture société.
-- `PUT .../extraction` : correction des données par administrateur/gestionnaire ; complétude déclenche l’analyse.
-- `PUT .../proposal` : correction des lignes et comptes par administrateur/gestionnaire.
-- `POST .../proposal/reject` : rejet explicite, sans écriture.
-- `POST .../proposal/approve` : nouvelle vérification des règles et création explicite d’une seule écriture.
-- `POST .../ocr/retry` : relance de l’étape échouée. Une erreur d’analyse ne refait pas l’OCR.
+## Espace et composants React
 
-Le texte brut n’est pas envoyé dans les props de liste ; il est chargé à la demande dans un endpoint privé `no-store`. Les réponses complètes sont conservées en base pour audit et ne sont pas journalisées dans les logs.
+- `resources/js/Pages/Invoices/Index.tsx` : sélection de société, liste et import ; les liens de facture ouvrent la revue dédiée.
+- `resources/js/Pages/Invoices/Show.tsx` : page de revue d’une facture, retour à la liste.
+- `resources/js/Components/InvoiceDocumentViewer.tsx` : original PDF/image, téléchargement, zoom, ajustement, rotation des images, plein écran et navigation PDF ; la rotation native des PDF dépend du navigateur.
+- `resources/js/Components/InvoiceReviewPanel.tsx` : détails privés, statut/modèle lorsqu’ils existent, texte OCR, formulaire facture et proposition existante. L’éditeur regroupe fournisseur, client, métadonnées, lignes, totaux/taxes et coordonnées bancaires. Les totaux extraits sont préservés ; aucune somme n’est recalculée dans React.
 
-## Contrôles et états
+Sur desktop, le viewer et le panneau sont côte à côte dans des colonnes indépendamment scrollables ; sur petit écran ils s’empilent. Les succès et erreurs d’action sont signalés avec toast.
 
-Le contrôle facture compare au millime HT + TVA + FODEC + autres taxes + timbre − retenue = total. Il ne suppose pas automatiquement qu’une donnée manquante est nulle. Champs requis pour analyse : fournisseur, numéro, date complète, devise, total et description de facture ou d’une ligne.
+## Routes HTTP principales
 
-La proposition doit utiliser uniquement les comptes/journaux actifs de la société. Avant validation, le serveur vérifie à nouveau les références, les montants, l’équilibre, le rapprochement au total invoice + retenue explicite et la complétude. Les alertes faible confiance/tiers non apparié restent visibles. Un manager peut rejeter ou approuver ; l’écriture est créée seulement par ce clic humain et n’est pas exportée vers Sage.
+- `GET /invoices` : workspace multi-société ; choisit une société accessible par défaut, permet de sélectionner les autres sociétés autorisées.
+- `GET /companies/{company}/invoices` : historique société.
+- `POST /companies/{company}/invoices/upload` : import privé.
+- `GET /companies/{company}/invoices/{invoice}` : page dédiée de revue.
+- `GET /companies/{company}/invoices/{invoice}/preview` : flux privé du document (`private, no-store`).
+- `GET /companies/{company}/invoices/{invoice}/details` : données JSON à la demande, protégées par l’accès société.
+- `PUT /companies/{company}/invoices/{invoice}/extraction` : enregistrer les corrections structurées.
+- `POST /companies/{company}/invoices/{invoice}/extraction/retry` : nouvelle extraction à partir du texte OCR stocké, sans OCR.
+- `POST /companies/{company}/invoices/{invoice}/ocr/retry` : reprise OCR.
+- `PUT /companies/{company}/invoices/{invoice}/proposal` : correction de proposition.
+- `POST /companies/{company}/invoices/{invoice}/proposal/reject` et `/proposal/approve` : décisions humaines.
 
-Les états d’étape affichés sont `ocr_queued`, `ocr_processing`, `data_extraction`, `invoice_incomplete`, `accounting_analysis`, `proposal_ready`, `proposal_rejected`, `accounting_validated` et les états d’échec dédiés. La page interroge les données toutes les cinq secondes pendant les étapes en cours.
+Chaque endpoint revérifie utilisateur/rôle, société et lien facture-société. Les détails et fichiers ne sont pas exposés dans les props globales de liste.
+
+## Données et structure
+
+- `Invoice` / `InvoiceLine` : champs normalisés facture/lignes ; contact fournisseur/client, modalités de paiement, coordonnées bancaires, réductions et montants extraits.
+- `InvoiceOcrResult` : réponse OCR brute, texte, structure optionnelle, modèle, usage et informations de traitement.
+- `InvoiceOcrSchema` / `InvoiceDataExtractionService` : JSON Schema strict, validation et normalisation ; extraction n’effectue aucun calcul comptable.
+- `InvoiceDataPersistence` : persistance transactionnelle de l’annotation JSON, colonnes et lignes.
+- `InvoiceDataCompletenessChecker` / `InvoiceTotalsConsistencyChecker` : règles déterministes distinctes du modèle.
+- `ProcessInvoiceOcr`, `ExtractInvoiceData`, `AnalyzeAccountingProposal` : jobs indépendants et tenant-scoped sur `ocr`.
+- `AccountingProposal` / `AccountingProposalLine` : réponses, version, modèle, usage, avertissements et revue humaine.
+- `InvoiceController` / `AccountingProposalController` : intake, accès, actions de revue, corrections et validation.
+
+Migrations relatives aux factures/propositions : `2026_09_28_000015_create_invoices_table`, `2026_09_28_000016_create_invoice_lines_table`, migrations OCR/audit, `2026_09_29_000001_add_llm_audit_and_invoice_journal_link`, `...000002_create_accounting_proposals_table`, `...000003_create_accounting_proposal_lines_table` et `...000004_add_invoice_contact_and_discount_fields`.
+
+## États et erreurs
+
+Les statuts incluent `uploaded`, `ocr_queued`, `ocr_processing`, `data_extraction`, `invoice_incomplete`, `accounting_analysis`, `proposal_ready`, `proposal_rejected`, `accounting_validated` ainsi que `ocr_failed`, `data_extraction_failed`, `accounting_analysis_failed`. `ocr_completed` reste un état historique. Les nouvelles réponses hors JSON/schema ou safety-classifier échouent sans modifier l’annotation déjà enregistrée ; les modèles et réponses fournisseur sont conservés pour audit sans inclure les secrets dans les logs.
 
 ## Tests
 
-- `tests/Feature/InvoiceIntakeTest.php` : stockage privé, rôles, accès société, doublons, historique, file et téléchargement.
+- `tests/Feature/InvoiceIntakeTest.php` : uploads, rôles, isolement société, page/aperçu, doublons, file et téléchargement.
 - `tests/Feature/InvoiceOcrProcessingTest.php` : OCR.space Engine 3, Mistral, schémas, erreurs et TLS.
-- `tests/Feature/OpenRouterInvoicePipelineTest.php` : extraction structurée, audits, complétude, analyse, isolement des sociétés, corrections et validation humaine.
-- `npm run build` valide React/TypeScript. `composer test` et lint PHP demandent PHP 8.3+ et Composer, non disponibles dans l’environnement courant.
+- `tests/Feature/OpenRouterInvoicePipelineTest.php` : extraction, validation/normalisation, erreurs, relance depuis OCR existant, préservation des données, analyse et décision humaine.
+- `npm run build` : build React/TypeScript.
+- `composer test` et lint PHP : nécessitent PHP 8.3+ et Composer.
 
 ## Hors périmètre
 
-Pas d’import/export Sage réel, apprentissage des corrections, creation de nouveaux tiers/comptes, rapprochement OCR de doublons sémantiques, règles exhaustives de devises/avoirs/retenues, ni conversion automatique de résultats incertains.
+Pas d’import/export Sage réel, apprentissage automatique des corrections, création de comptes/tiers par IA, rapprochement OCR sémantique des doublons, ni correction automatique de totaux ambigus.

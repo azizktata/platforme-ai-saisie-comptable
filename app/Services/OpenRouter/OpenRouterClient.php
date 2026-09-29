@@ -13,14 +13,12 @@ class OpenRouterClient
     /**
      * @param list<array{role: string, content: string}> $messages
      * @param array<string, mixed> $responseFormat
-     * @param array<string, mixed>|null $reasoning
      */
     public function completeJson(
         array $messages,
         array $responseFormat,
         int $maxTokens = 5000,
         ?string $model = null,
-        ?array $reasoning = null,
     ): StructuredAiResult
     {
         $apiKey = config('services.openrouter.api_key');
@@ -80,10 +78,6 @@ class OpenRouterClient
                 'max_tokens' => min(max(256, $maxTokens), 12000),
             ];
 
-            if ($reasoning !== null) {
-                $payload['reasoning'] = $reasoning;
-            }
-
             $response = Http::acceptJson()
                 ->withHeaders($headers)
                 ->withToken($apiKey)
@@ -133,24 +127,47 @@ class OpenRouterClient
             );
         }
 
-        $content = $rawResponse['choices'][0]['message']['content'] ?? null;
-        $finishReason = $rawResponse['choices'][0]['finish_reason'] ?? null;
+        $choice = $rawResponse['choices'][0] ?? null;
+        $message = is_array($choice) && is_array($choice['message'] ?? null) ? $choice['message'] : [];
+        $content = $message['content'] ?? null;
+        $finishReason = is_array($choice) ? ($choice['finish_reason'] ?? null) : null;
         $model = $rawResponse['model'] ?? null;
-
-        if (! is_string($content) || trim($content) === '' || ! is_string($model) || trim($model) === '') {
-            throw new AiProviderException(
-                'openrouter_invalid_response',
-                false,
-                'OpenRouter n’a pas renvoyé une réponse structurée exploitable.',
-                $rawResponse,
-            );
-        }
+        $refusal = $message['refusal'] ?? null;
 
         if ($finishReason === 'length') {
             throw new AiProviderException(
                 'openrouter_response_truncated',
                 false,
                 'La réponse OpenRouter est incomplète. Réduisez la taille du document ou relancez le traitement.',
+                $rawResponse,
+            );
+        }
+
+        if (in_array($finishReason, ['content_filter', 'safety', 'refusal'], true)
+            || (is_string($refusal) && trim($refusal) !== '')
+            || (is_string($content) && preg_match('/^\\s*(?:user\\s+safety\\s*:|safety(?:\\s+classifier)?\\s*:|refusal\\s*:)/i', $content) === 1)) {
+            throw new AiProviderException(
+                'openrouter_safety_response',
+                false,
+                'Le modèle n’a pas produit de données facture : sa réponse de sécurité/refus a été rejetée.',
+                $rawResponse,
+            );
+        }
+
+        if (! in_array($finishReason, ['stop', 'eos'], true)) {
+            throw new AiProviderException(
+                'openrouter_unsupported_finish_reason',
+                false,
+                'OpenRouter a terminé la réponse dans un format non pris en charge.',
+                $rawResponse,
+            );
+        }
+
+        if (! is_string($content) || trim($content) === '' || ! is_string($model) || trim($model) === '') {
+            throw new AiProviderException(
+                'openrouter_invalid_response',
+                false,
+                'OpenRouter n’a pas renvoyé une réponse structurée exploitable.',
                 $rawResponse,
             );
         }
