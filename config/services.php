@@ -14,7 +14,7 @@ return [
     ],
     'invoice_extraction' => [
         'provider' => env('INVOICE_EXTRACTION_PROVIDER', 'openrouter'),
-        'model' => env('OPENROUTER_EXTRACTION_MODEL', 'qwen/qwen-2.5-7b-instruct:free'),
+        'model' => env('OPENROUTER_EXTRACTION_MODEL', 'qwen/qwen-2.5-7b-instruct'),
         'max_tokens' => (int) env('OPENROUTER_EXTRACTION_MAX_TOKENS', 2500),
     ],
     'openrouter' => [
