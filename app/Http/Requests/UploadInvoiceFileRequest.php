@@ -18,7 +18,7 @@ class UploadInvoiceFileRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'file' => ['required', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:20480'],
+            'file' => ['required', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:'.$this->maxFileSizeKilobytes()],
             'confirm_duplicate' => ['sometimes', 'boolean'],
         ];
     }
@@ -29,7 +29,26 @@ class UploadInvoiceFileRequest extends FormRequest
             'file.required' => 'Sélectionnez un fichier à importer.',
             'file.file' => 'Le fichier transmis est invalide.',
             'file.mimes' => 'Formats acceptés : PDF, JPG, JPEG et PNG.',
-            'file.max' => 'Chaque fichier doit faire 20 Mo maximum.',
+            'file.max' => 'Chaque fichier doit faire '.$this->maxFileSizeLabel().' maximum.',
         ];
+    }
+
+    private function maxFileSizeKilobytes(): int
+    {
+        return (int) ceil($this->maxFileSizeBytes() / 1024);
+    }
+
+    private function maxFileSizeBytes(): int
+    {
+        return config('services.ocr.provider') === 'ocr_space'
+            ? max(1, (int) config('services.ocr_space.max_file_size_bytes', 1024 * 1024))
+            : 20 * 1024 * 1024;
+    }
+
+    private function maxFileSizeLabel(): string
+    {
+        $megabytes = $this->maxFileSizeBytes() / (1024 * 1024);
+
+        return rtrim(rtrim(number_format($megabytes, 2, ',', ''), '0'), ',').' Mo';
     }
 }

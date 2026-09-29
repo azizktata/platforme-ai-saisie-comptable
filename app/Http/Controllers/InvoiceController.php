@@ -39,10 +39,14 @@ class InvoiceController extends Controller
             abort_unless(is_string($requestedCompanyId) && ctype_digit($requestedCompanyId), 404);
             $company = $companies->firstWhere('id', (int) $requestedCompanyId);
             abort_unless($company instanceof Company, 404);
+        } else {
+            $company = $companies->first();
         }
 
         return Inertia::render('Invoices/Index', [
             'mode' => 'workspace',
+            'ocrProvider' => (string) config('services.ocr.provider', 'ocr_space'),
+            'maxUploadFileSizeBytes' => $this->maxUploadFileSizeBytes(),
             'companies' => $this->companyOptions($companies),
             'company' => $company ? $this->companySummary($company) : null,
             'invoices' => $company ? $this->invoicePaginator($company) : null,
@@ -57,6 +61,8 @@ class InvoiceController extends Controller
 
         return Inertia::render('Invoices/Index', [
             'mode' => 'history',
+            'ocrProvider' => (string) config('services.ocr.provider', 'ocr_space'),
+            'maxUploadFileSizeBytes' => $this->maxUploadFileSizeBytes(),
             'companies' => [],
             'company' => $this->companySummary($company),
             'invoices' => $this->invoicePaginator($company),
@@ -270,6 +276,13 @@ class InvoiceController extends Controller
         );
     }
 
+    private function maxUploadFileSizeBytes(): int
+    {
+        return config('services.ocr.provider') === 'ocr_space'
+            ? max(1, (int) config('services.ocr_space.max_file_size_bytes', 1024 * 1024))
+            : 20 * 1024 * 1024;
+    }
+
     private function accessibleCompanies(User $user): Collection
     {
         return $user->isCabinetAdmin()
@@ -309,6 +322,7 @@ class InvoiceController extends Controller
                 'invoice_date',
                 'total_amount',
                 'currency',
+                'description',
                 'status',
                 'ocr_attempts',
                 'ocr_error_message',
@@ -326,6 +340,7 @@ class InvoiceController extends Controller
                 'invoice_date' => $invoice->invoice_date?->toDateString(),
                 'total_amount' => $invoice->total_amount,
                 'currency' => $invoice->currency,
+                'description' => $invoice->description,
                 'status' => $invoice->status,
                 'ocr_attempts' => $invoice->ocr_attempts,
                 'ocr_error_message' => $invoice->ocr_error_message,
