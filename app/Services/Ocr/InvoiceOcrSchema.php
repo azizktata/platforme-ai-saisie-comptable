@@ -108,6 +108,15 @@ PROMPT;
     }
 
     /** @return array<string, mixed> */
+    public function emptyAnnotation(): array
+    {
+        $annotation = array_fill_keys($this->invoiceFieldNames(), null);
+        $annotation['lines'] = [];
+
+        return $annotation;
+    }
+
+    /** @return array<string, mixed> */
     public function validate(array $data): array
     {
         if (array_is_list($data)) {

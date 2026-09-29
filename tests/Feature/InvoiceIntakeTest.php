@@ -19,6 +19,14 @@ class InvoiceIntakeTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config()->set('services.ocr.provider', 'ocr_space');
+        config()->set('services.ocr_space.max_file_size_bytes', 1024 * 1024);
+    }
+
     public function test_invoice_manager_can_upload_view_and_download_a_private_company_document(): void
     {
         Storage::fake('local');
@@ -59,6 +67,23 @@ class InvoiceIntakeTest extends TestCase
             ->get(route('companies.invoices.download', [$company, $invoice]))
             ->assertOk()
             ->assertDownload('facture.png');
+    }
+
+    public function test_ocr_space_free_uploads_are_limited_to_one_megabyte(): void
+    {
+        config()->set('services.ocr.provider', 'ocr_space');
+        Storage::fake('local');
+
+        $company = Company::factory()->create();
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $file = UploadedFile::fake()->create('large.pdf', 1025, 'application/pdf');
+
+        $this->postUpload($manager, $company, $file)
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('file')
+            ->assertJsonPath('errors.file.0', 'Chaque fichier doit faire 1 Mo maximum.');
+
+        $this->assertDatabaseCount('invoices', 0);
     }
 
     public function test_same_company_duplicate_requires_explicit_confirmation_before_storage(): void
@@ -213,8 +238,8 @@ class InvoiceIntakeTest extends TestCase
     {
         $cabinet = Cabinet::factory()->create();
         $admin = User::factory()->cabinetAdmin()->create(['cabinet_id' => $cabinet->id]);
-        $firstCompany = Company::factory()->create(['cabinet_id' => $cabinet->id]);
-        $secondCompany = Company::factory()->create(['cabinet_id' => $cabinet->id]);
+        $firstCompany = Company::factory()->create(['cabinet_id' => $cabinet->id, 'name' => 'Alpha société']);
+        $secondCompany = Company::factory()->create(['cabinet_id' => $cabinet->id, 'name' => 'Beta société']);
         $firstInvoice = $this->createInvoice($firstCompany, 'premiere.pdf', 'ocr_completed');
         $firstInvoice->forceFill([
             'ocr_reviewed_at' => now(),
@@ -229,9 +254,13 @@ class InvoiceIntakeTest extends TestCase
             ->assertInertia(fn (Assert $page) => $page
                 ->component('Invoices/Index')
                 ->where('mode', 'workspace')
-                ->where('company', null)
-                ->where('invoices', null)
-                ->where('canUploadInvoices', false)
+                ->where('ocrProvider', 'ocr_space')
+                ->where('maxUploadFileSizeBytes', 1024 * 1024)
+                ->where('company.id', $firstCompany->id)
+                ->where('invoices.total', 1)
+                ->where('invoices.data.0.id', $firstInvoice->id)
+                ->where('canUploadInvoices', true)
+                ->where('canReviewInvoices', true)
                 ->has('companies', 2));
 
         $this->actingAs($admin)
@@ -239,6 +268,8 @@ class InvoiceIntakeTest extends TestCase
             ->assertOk()
             ->assertInertia(fn (Assert $page) => $page
                 ->where('mode', 'workspace')
+                ->where('ocrProvider', 'ocr_space')
+                ->where('maxUploadFileSizeBytes', 1024 * 1024)
                 ->where('company.id', $firstCompany->id)
                 ->where('canUploadInvoices', true)
                 ->where('canReviewInvoices', true)
@@ -274,6 +305,8 @@ class InvoiceIntakeTest extends TestCase
             ->assertInertia(fn (Assert $page) => $page
                 ->has('companies', 1)
                 ->where('companies.0.id', $visibleCompany->id)
+                ->where('company.id', $visibleCompany->id)
+                ->where('invoices.total', 1)
                 ->where('canUploadInvoices', false));
 
         $this->actingAs($user)

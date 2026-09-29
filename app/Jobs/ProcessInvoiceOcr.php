@@ -197,9 +197,13 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
     private function userFacingError(string $errorCode): string
     {
         return match ($errorCode) {
-            'configuration_missing' => 'La clé Mistral OCR n’est pas configurée sur le serveur.',
-            'tls_ca_bundle_invalid', 'tls_certificate_verification_failed' => 'Échec de vérification TLS. Vérifiez le bundle CA de PHP ou configurez MISTRAL_CA_BUNDLE.',
-            'provider_authentication_failed' => 'Mistral OCR a refusé l’authentification. Vérifiez la configuration du serveur.',
+            'configuration_missing' => 'La clé API du fournisseur OCR actif n’est pas configurée sur le serveur.',
+            'tls_ca_bundle_invalid', 'tls_certificate_verification_failed' => 'Échec de vérification TLS. Vérifiez les certificats CA de PHP ou le bundle CA du fournisseur actif.',
+            'provider_file_too_large' => 'Le fichier dépasse la limite de taille du fournisseur OCR actif. Réduisez sa taille puis relancez l’OCR.',
+            'provider_partial_result' => 'OCR.space n’a pas traité toutes les pages. Le forfait gratuit accepte au maximum trois pages PDF.',
+            'ocr_text_unavailable' => 'Aucun texte lisible n’a été détecté. Vérifiez la qualité et l’orientation du document.',
+            'provider_authentication_failed' => 'Le fournisseur OCR a refusé l’authentification. Vérifiez la configuration du serveur.',
+            'configuration_invalid' => 'La configuration du fournisseur OCR actif est invalide. Vérifiez les paramètres du serveur.',
             'provider_rejected_request', 'invalid_provider_response', 'invalid_structured_annotation' => 'La réponse OCR n’a pas pu être validée. Le document peut être vérifié ou relancé.',
             'source_file_missing', 'source_file_unreadable', 'source_file_invalid_path' => 'Le document privé n’a pas pu être lu pour le traitement OCR.',
             'unsupported_document_type', 'unsupported_storage_disk' => 'Le format ou le stockage du document ne peut pas être traité par OCR.',

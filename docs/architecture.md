@@ -2,15 +2,15 @@
 
 ## Source de vérité et livraison incrémentale
 
-Le cahier des charges client est documenté dans [`requirements.md`](requirements.md). Le projet est livré dans l’ordre de ses cinq phases. Les Phases 1 (fondation multi-cabinet), 2 (référentiels comptables avec données d’exemple) et l’intake de la Phase 3 (factures/lignes, upload privé, doublons et consultation scoppée) sont implémentées. Aucun OCR, import `.mae` ou transfert Sage réel n’est actuellement exécuté.
+Le cahier des charges client est documenté dans [`requirements.md`](requirements.md). Le projet est livré dans l’ordre de ses cinq phases. Les Phases 1–4 sont implémentées : fondation multi-cabinet, référentiels comptables avec données d’exemple, intake privé des factures et traitement OCR asynchrone. OCR.space Free Engine 3 est le provider actif par défaut (transcription texte) ; Mistral reste sélectionnable pour l’extraction structurée de l’offre Pro. L’import `.mae` et le transfert Sage réel restent différés.
 
 ## Stack
 
 - Laravel 13 et PHP 8.3+ pour l’application monolithique, les sessions, l’autorisation, les règles métier, le stockage et les jobs.
 - Inertia.js, React 19 et TypeScript pour les pages et composants d’interface ; Tailwind CSS pour les utilitaires de présentation.
 - MySQL comme base d’exécution principale. SQLite en mémoire reste réservé aux tests automatisés.
-- Les mutations des Phases 1 et 2 sont synchrones. La Phase 3 stocke les fichiers mais ne planifie aucun job ; la Phase 4 introduira une queue persistante et un worker pour le traitement OCR.
-- Mistral OCR et Mistral Small sont les fournisseurs demandés pour les phases IA ; ils seront isolés des contrôleurs derrière des contrats de service. Aucune clé ni réponse IA n’est requise pour les Phases 1 à 3.
+- Les mutations des Phases 1 et 2 sont synchrones. Le traitement OCR de la Phase 4 utilise la queue Laravel `database` et un worker.
+- `OcrProvider` isole les fournisseurs : OCR.space Free Engine 3 est actif par défaut et Mistral reste disponible via `OCR_PROVIDER=mistral`. Mistral Small demeure différé à la Phase 5. Les clés API restent côté serveur.
 - Les sources facture de la Phase 3 utilisent le disque Laravel `local` (`storage/app/private` par défaut) et ne sont accessibles qu’au travers d’une route de téléchargement authentifiée et autorisée.
 
 Le serveur Vite `preview:ui` est un aperçu autonome non persistant pour examiner le tableau de bord et les données comptables fictives. L’application Laravel utilise `resources/views/app.blade.php` et `resources/js/app.tsx`; `ToastHost` et `RequestToastEvents` sont montés dans l’entrée Inertia.
@@ -55,11 +55,11 @@ Les comptes généraux/analytique, tiers et journaux ont un code texte unique pa
 
 Les migrations `000015`–`000016` créent `invoices` et `invoice_lines`. Une facture est rattachée à une société ; son tiers, son importateur et les valeurs OCR/montants sont nullable selon disponibilité. L’état initial est `uploaded`. Les lignes sont préparées par le schéma mais aucune ligne n’est générée avant OCR.
 
-`InvoiceController` reçoit un fichier par requête et s’appuie sur `UploadInvoiceFileRequest`, `CompanyPolicy::manageInvoices` et `StoreInvoiceUpload`. Le client traite un lot séquentiellement (limite d’interface 300 fichiers, limite serveur 20 Mo par fichier). Le service stocke le document sur le disque `local`, sous un chemin société, puis enregistre MIME, taille, nom d’origine et empreinte SHA-256. Les erreurs de persistance tentent de supprimer le fichier déjà écrit.
+`InvoiceController` reçoit un fichier par requête et s’appuie sur `UploadInvoiceFileRequest`, `CompanyPolicy::manageInvoices` et `StoreInvoiceUpload`. Le client traite un lot séquentiellement (limite d’interface 300 fichiers ; limite serveur dynamique de 1 Mo avec OCR.space Free ou 20 Mo avec Mistral). Le service stocke le document sur le disque `local`, sous un chemin société, puis enregistre MIME, taille, nom d’origine et empreinte SHA-256. Les erreurs de persistance tentent de supprimer le fichier déjà écrit.
 
 La détection SHA-256 s’effectue au niveau de la société, sous verrou de la ligne société afin de sérialiser les uploads concurrents. Si le contenu existe déjà, le serveur répond `409` sans nouvelle persistance, sauf confirmation explicite. La liste est paginée et n’expose jamais `file_path`. Le téléchargement vérifie le droit `view` de la société et l’égalité `invoice.company_id === company.id` avant de transmettre le document depuis le disque privé.
 
-L’import ne démarre pas encore de Job et n’appelle pas Mistral. Le schéma cible complet (dont les propositions) et le flux OCR sont détaillés dans le cahier des charges.
+Chaque import accepté planifie `ProcessInvoiceOcr` après persistance. OCR.space envoie le fichier privé en multipart avec `apikey` dans l’en-tête et Engine 3, puis rend le texte OCR consultable ; le provider ne fabrique pas de champs structurés. Mistral reste disponible pour l’annotation JSON structurée. Le schéma cible des propositions comptables reste détaillé dans le cahier des charges et appartient à la Phase 5.
 
 ## Responsabilités actuelles
 
@@ -69,7 +69,7 @@ L’import ne démarre pas encore de Job et n’appelle pas Mistral. Le schéma 
 - `StoreCompanyRequest` / `StoreCabinetUserRequest` / `UploadInvoiceFileRequest` : validation serveur, dont l’interdiction d’affecter une société d’un autre cabinet et les formats/tailles d’upload autorisés.
 - `CompanyController` / `CabinetUserController` : liste de sociétés accessibles, création réservée à l’admin, création d’utilisateur et affectation de rôles.
 - `AccountingDataController` : consulte les référentiels/historiques d’une société autorisée et expose le chargement démo uniquement en local/test ; `SeedDemoAccountingData` prépare le dataset sans lire Sage.
-- `InvoiceController` : liste les factures d’une société, enregistre un fichier soumis au contrôle de doublons et transmet les téléchargements privés. `StoreInvoiceUpload` gère stockage et métadonnées ; il ne lance pas d’OCR.
+- `InvoiceController` : workspace global (première société accessible présélectionnée), historique société, upload/doublons, relance, téléchargement et revue groupée. `StoreInvoiceUpload` gère stockage et métadonnées ; `ProcessInvoiceOcr` orchestre le provider OCR configurable.
 - `DashboardController` : sociétés visibles limitées au cabinet et aux rôles de l’utilisateur.
 - `HandleInertiaRequests` : données authentifiées et cabinet partagé avec les pages Inertia.
 - `resources/js/Pages` : adaptateurs/pages, dont `AccountingData/Show` et `Invoices/Index` ; `resources/js/Components/AppShell.tsx` : navigation globale et liens contextuels par société ; `ToastHost` / `RequestToastEvents` : retours de succès/erreur.
@@ -77,7 +77,7 @@ L’import ne démarre pas encore de Job et n’appelle pas Mistral. Le schéma 
 
 ## Isolation multi-tenant
 
-Chaque société appartient à un cabinet. Les listes admin partent de `cabinet_id`; les listes de membres partent de la relation many-to-many. Les affectations d’utilisateurs sont validées contre le cabinet de l’administrateur. Les lectures comptables et factures de la Phase 2/3 utilisent les relations du `Company` autorisé ; le téléchargement vérifie en plus que la facture appartient à la société de la route. Aucun `company_id` fourni par le client n’est utilisé pour choisir le tenant. Les futurs jobs OCR devront conserver la même portée.
+Chaque société appartient à un cabinet. Les listes admin partent de `cabinet_id`; les listes de membres partent de la relation many-to-many. Les affectations d’utilisateurs sont validées contre le cabinet de l’administrateur. Les lectures comptables et factures des Phases 2–4 utilisent les relations du `Company` autorisé ; le téléchargement vérifie en plus que la facture appartient à la société de la route. Le `company_id` de l’espace Factures est validé contre les sociétés accessibles avant toute requête. Les jobs OCR sont limités au couple société/facture.
 
 ## Décisions et compatibilité
 
@@ -94,6 +94,6 @@ Chaque société appartient à un cabinet. Les listes admin partent de `cabinet_
 - Routes métier protégées par `auth`; policies et requêtes restent tenant-scoped.
 - Les sources facture sont privées et téléchargées uniquement via une route authentifiée et limitée à une société autorisée ; les chemins n’apparaissent pas dans le navigateur. Les futures réponses externes devront suivre le même contrôle d’accès.
 - Les jobs d’IA devront être idempotents, journaliser l’état/durée/modèle utile, gérer timeout/erreurs et ne jamais finaliser une écriture sans validation humaine.
-- Ne jamais inclure de clé Mistral ou identifiants réels dans Git ; utiliser les variables d’environnement et garder les logs minimaux.
+- Ne jamais inclure de clé OCR.space, Mistral ou identifiants réels dans Git ; utiliser les variables d’environnement et garder les logs minimaux.
 - Les tests DB utilisent SQLite en mémoire ; pour le lancement applicatif, configurer MySQL comme décrit dans le README.
 - Le chargement du jeu Sage-like est bloqué hors des environnements `local` et `testing`; il ne doit jamais remplacer un import ou une restauration de données réelles.

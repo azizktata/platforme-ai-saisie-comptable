@@ -23,10 +23,16 @@ class InvoiceOcrProcessingTest extends TestCase
     {
         parent::setUp();
 
+        config()->set('services.ocr.provider', 'mistral');
         config()->set('services.mistral.api_key', 'test-mistral-key');
         config()->set('services.mistral.base_url', 'https://api.mistral.ai');
         config()->set('services.mistral.ocr_model', 'mistral-ocr-latest');
         config()->set('services.mistral.ca_bundle', null);
+        config()->set('services.ocr_space.api_key', null);
+        config()->set('services.ocr_space.endpoint', 'https://api.ocr.space/parse/image');
+        config()->set('services.ocr_space.ocr_engine', 3);
+        config()->set('services.ocr_space.ca_bundle', null);
+        config()->set('services.ocr_space.max_file_size_bytes', 1024 * 1024);
     }
 
     public function test_ocr_extracts_validated_invoice_and_lines_and_keeps_raw_response(): void
@@ -217,6 +223,115 @@ class InvoiceOcrProcessingTest extends TestCase
         $this->assertSame('ocr_failed', $invoice->status);
         $this->assertSame('tls_certificate_verification_failed', $invoice->ocr_error_code);
         $this->assertStringContainsString('vérification TLS', $invoice->ocr_error_message);
+        $this->assertSame(1, $invoice->ocr_attempts);
+    }
+
+    public function test_ocr_space_engine_3_transcribes_text_without_fabricating_structured_invoice_fields(): void
+    {
+        Storage::fake('local');
+        $invoice = $this->queuedInvoice();
+        $ocrText = "FACTURE N° FA-2026-01\nDate : 29/09/2026\nTotal TTC : 119,000 TND";
+        config()->set('services.ocr.provider', 'ocr_space');
+        config()->set('services.ocr_space.api_key', 'test-ocr-space-key');
+        config()->set('services.ocr_space.endpoint', 'https://api.ocr.space/parse/image');
+        Http::fake([
+            'https://api.ocr.space/parse/image' => Http::response([
+                'OCRExitCode' => 1,
+                'IsErroredOnProcessing' => false,
+                'ProcessingTimeInMilliseconds' => '451',
+                'ParsedResults' => [[
+                    'FileParseExitCode' => '1',
+                    'ParsedText' => $ocrText,
+                ]],
+            ]),
+        ]);
+
+        $this->runJob($invoice);
+
+        $invoice->refresh();
+        $this->assertSame('ocr_completed', $invoice->status);
+        $this->assertSame('ocr.space-engine-3', $invoice->ocr_model);
+        $this->assertSame($ocrText, $invoice->description);
+        $this->assertNull($invoice->supplier_name);
+        $this->assertNull($invoice->invoice_number);
+        $this->assertNull($invoice->total_amount);
+        $this->assertSame(['invoice_totals_unverified'], $invoice->ocr_warnings);
+        $this->assertSame([], $invoice->lines()->get()->all());
+        $this->assertSame(1, $invoice->ocr_usage['pages_processed']);
+        $this->assertSame(451, $invoice->ocr_usage['processing_time_ms']);
+        $this->assertSame($ocrText, $invoice->ocr_response['ParsedResults'][0]['ParsedText']);
+
+        Http::assertSent(function (ClientRequest $request): bool {
+            $fields = collect($request->data())->mapWithKeys(
+                fn (array $part): array => [$part['name'] => $part['contents'] ?? null],
+            );
+
+            return $request->url() === 'https://api.ocr.space/parse/image'
+                && $request->hasHeader('apikey', 'test-ocr-space-key')
+                && $fields->get('OCREngine') === '3'
+                && $fields->get('language') === 'auto'
+                && $fields->get('isTable') === 'true'
+                && $request->hasFile('file');
+        });
+    }
+
+    public function test_ocr_space_partial_pdf_result_fails_instead_of_silently_saving_incomplete_text(): void
+    {
+        Storage::fake('local');
+        $invoice = $this->queuedInvoice();
+        config()->set('services.ocr.provider', 'ocr_space');
+        config()->set('services.ocr_space.api_key', 'test-ocr-space-key');
+        Http::fake([
+            'https://api.ocr.space/parse/image' => Http::response([
+                'OCRExitCode' => 2,
+                'IsErroredOnProcessing' => true,
+                'ParsedResults' => [[
+                    'FileParseExitCode' => '1',
+                    'ParsedText' => 'First page only',
+                ]],
+            ]),
+        ]);
+
+        $this->runJob($invoice);
+
+        $invoice->refresh();
+        $this->assertSame('ocr_failed', $invoice->status);
+        $this->assertSame('provider_partial_result', $invoice->ocr_error_code);
+        $this->assertSame('First page only', $invoice->ocr_response['ParsedResults'][0]['ParsedText']);
+        $this->assertSame(1, $invoice->ocr_attempts);
+    }
+
+    public function test_ocr_space_missing_key_fails_without_sending_a_request(): void
+    {
+        Storage::fake('local');
+        $invoice = $this->queuedInvoice();
+        config()->set('services.ocr.provider', 'ocr_space');
+        config()->set('services.ocr_space.api_key', null);
+        Http::preventStrayRequests();
+
+        $this->runJob($invoice);
+
+        $invoice->refresh();
+        $this->assertSame('ocr_failed', $invoice->status);
+        $this->assertSame('configuration_missing', $invoice->ocr_error_code);
+        $this->assertStringContainsString('fournisseur OCR actif', $invoice->ocr_error_message);
+        $this->assertSame(1, $invoice->ocr_attempts);
+    }
+
+    public function test_ocr_space_rejects_files_over_its_configured_free_limit(): void
+    {
+        Storage::fake('local');
+        $invoice = $this->queuedInvoice();
+        config()->set('services.ocr.provider', 'ocr_space');
+        config()->set('services.ocr_space.api_key', 'test-ocr-space-key');
+        config()->set('services.ocr_space.max_file_size_bytes', $invoice->size_bytes - 1);
+        Http::preventStrayRequests();
+
+        $this->runJob($invoice);
+
+        $invoice->refresh();
+        $this->assertSame('ocr_failed', $invoice->status);
+        $this->assertSame('provider_file_too_large', $invoice->ocr_error_code);
         $this->assertSame(1, $invoice->ocr_attempts);
     }
 

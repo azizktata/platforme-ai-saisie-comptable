@@ -14,6 +14,7 @@ type InvoiceSummary = {
   invoice_date: string | null;
   total_amount: string | null;
   currency: string | null;
+  description: string | null;
   status: string;
   ocr_attempts: number;
   ocr_error_message: string | null;
@@ -41,6 +42,8 @@ type InvoiceUploadFailure = {
 
 type Props = {
   mode: 'workspace' | 'history';
+  ocrProvider: 'ocr_space' | 'mistral';
+  maxUploadFileSizeBytes: number;
   companies: { id: number; name: string }[];
   company: { id: number; name: string; currency: string } | null;
   invoices: Paginator<InvoiceSummary> | null;
@@ -57,7 +60,7 @@ type UploadResponse = {
 
 const MAX_FILES_PER_BATCH = 300;
 
-export default function InvoicesIndex({ mode, companies, company, invoices, canUploadInvoices, canReviewInvoices, auth }: Props) {
+export default function InvoicesIndex({ mode, ocrProvider, maxUploadFileSizeBytes, companies, company, invoices, canUploadInvoices, canReviewInvoices, auth }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -268,7 +271,9 @@ export default function InvoicesIndex({ mode, companies, company, invoices, canU
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
               {mode === 'history'
                 ? 'Consultez les documents déposés pour cette société, leur état OCR et les résultats de vérification.'
-                : 'Choisissez une société pour déposer des documents et suivre les imports récents. Chaque fichier est traité séparément par l’OCR Mistral.'}
+                : ocrProvider === 'ocr_space'
+                  ? 'La première société accessible est sélectionnée automatiquement. OCR.space Engine 3 retranscrit le texte ; les champs fournisseur, date et montants ne sont pas structurés automatiquement.'
+                  : 'La première société accessible est sélectionnée automatiquement. Chaque fichier est traité séparément par Mistral OCR.'}
             </p>
           </div>
           {mode === 'workspace' ? (
@@ -280,7 +285,7 @@ export default function InvoicesIndex({ mode, companies, company, invoices, canU
                 disabled={isUploading}
                 onChange={(event) => router.get('/invoices', event.target.value ? { company_id: Number(event.target.value) } : {}, { preserveScroll: true, replace: true })}
               >
-                <option value="">Sélectionner une société</option>
+                <option value="" disabled={companies.length > 0}>Sélectionner une société</option>
                 {companies.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
             </label>
@@ -297,7 +302,7 @@ export default function InvoicesIndex({ mode, companies, company, invoices, canU
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700"><Upload size={19} /></span>
               <div>
                 <h2 className="font-semibold text-slate-900">Importer des factures</h2>
-                <p className="mt-1 text-sm leading-5 text-slate-500">PDF, JPG, JPEG ou PNG · 20 Mo maximum par fichier · jusqu’à {MAX_FILES_PER_BATCH} fichiers.</p>
+                <p className="mt-1 text-sm leading-5 text-slate-500">PDF, JPG, JPEG ou PNG · {formatFileSize(maxUploadFileSizeBytes)} maximum par fichier · jusqu’à {MAX_FILES_PER_BATCH} fichiers.</p>
               </div>
             </div>
 
@@ -363,7 +368,7 @@ export default function InvoicesIndex({ mode, companies, company, invoices, canU
             </button>
 
             <p className="mt-3 text-xs leading-5 text-slate-500">
-              Les originaux restent dans le stockage privé. L’OCR démarre en arrière-plan ; les champs extraits et montants doivent toujours être vérifiés. Aucune proposition comptable n’est générée à cette phase.
+              Les originaux restent dans le stockage privé. {ocrProvider === 'ocr_space' ? 'OCR.space transcrit le texte sans remplir automatiquement les champs structurés ; ouvrez « Afficher le texte OCR » pour le vérifier.' : 'Mistral extrait des champs et des montants qui doivent toujours être vérifiés.'} Aucune proposition comptable n’est générée à cette phase.
             </p>
           </section>
         ) : mode === 'workspace' && company ? (
@@ -441,6 +446,14 @@ export default function InvoicesIndex({ mode, companies, company, invoices, canU
                       <td className="min-w-56 px-5 py-3">
                         <span className="block max-w-72 truncate font-medium text-slate-800" title={invoice.original_filename}>{invoice.original_filename}</span>
                         <span className="mt-0.5 block text-xs text-slate-400">{formatFileSize(invoice.size_bytes)} · {formatTimestamp(invoice.created_at)}</span>
+                        {invoice.status === 'ocr_completed' && invoice.description && (
+                          <details className="mt-1 max-w-72 text-xs">
+                            <summary className="cursor-pointer font-medium text-teal-700 hover:text-teal-900">
+                              {ocrProvider === 'ocr_space' ? 'Afficher le texte OCR' : 'Afficher la description'}
+                            </summary>
+                            <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-50 p-3 font-sans leading-5 text-slate-700">{invoice.description}</pre>
+                          </details>
+                        )}
                       </td>
                       <td className="px-5 py-3 text-slate-600">
                         {invoice.supplier_name || 'Fournisseur à identifier'}
