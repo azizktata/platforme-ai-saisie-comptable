@@ -146,7 +146,7 @@ class OcrSpaceProvider implements OcrProvider
                     ['Content-Type' => $invoice->mime_type],
                 )
                 ->post($endpoint, [
-                    'language' => 'auto',
+                    'language' => 'fre',
                     'isOverlayRequired' => 'false',
                     'isTable' => 'true',
                     'OCREngine' => (string) $engine,
