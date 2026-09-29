@@ -8,6 +8,7 @@ use App\Exceptions\OcrProviderException;
 use App\Models\Invoice;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use JsonException;
 use Throwable;
@@ -84,7 +85,7 @@ class MistralOcrProvider implements OcrProvider
                 ->connectTimeout(min(30, $timeout))
                 ->timeout($timeout)
                 ->post($baseUrl.'/v1/ocr', [
-                    'model' => config('services.mistral.ocr_model', 'mistral-ocr-latest'),
+                    'model' => config('services.mistral.ocr_model', 'mistral-moderation-2603'),
                     'document' => $document,
                     'document_annotation_format' => $this->schema->responseFormat(),
                     'document_annotation_prompt' => $this->schema->annotationPrompt(),
@@ -102,6 +103,12 @@ class MistralOcrProvider implements OcrProvider
         }
 
         if (! $response->successful()) {
+            Log::error('MISTRAL RAW ERROR', [
+                'status' => $response->status(),
+                'body' => $response->body(),
+                'json' => $response->json(),
+                'headers' => $response->headers(),
+            ]);
             $status = $response->status();
             $retryable = $status === 429 || $status >= 500;
             $errorCode = match (true) {
