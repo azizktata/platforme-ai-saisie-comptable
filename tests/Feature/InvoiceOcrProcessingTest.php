@@ -7,6 +7,9 @@ use App\Exceptions\OcrProviderException;
 use App\Jobs\ProcessInvoiceOcr;
 use App\Models\Company;
 use App\Models\Invoice;
+use App\Services\Invoices\InvoiceDataCompletenessChecker;
+use App\Services\Invoices\InvoiceDataPersistence;
+use App\Services\Invoices\InvoiceProcessingErrorMessage;
 use App\Services\Ocr\InvoiceTotalsConsistencyChecker;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
@@ -46,7 +49,7 @@ class InvoiceOcrProcessingTest extends TestCase
         $this->runJob($invoice);
 
         $invoice->refresh();
-        $this->assertSame('ocr_completed', $invoice->status);
+        $this->assertSame('accounting_analysis', $invoice->status);
         $this->assertSame(1, $invoice->ocr_attempts);
         $this->assertSame('Fournisseur Démo', $invoice->supplier_name);
         $this->assertSame('119.000', $invoice->total_amount);
@@ -105,7 +108,7 @@ class InvoiceOcrProcessingTest extends TestCase
         $this->runJob($invoice);
 
         $invoice->refresh();
-        $this->assertSame('ocr_completed', $invoice->status);
+        $this->assertSame('accounting_analysis', $invoice->status);
         $this->assertSame('120.000', $invoice->total_amount);
         $this->assertSame(['invoice_total_mismatch'], $invoice->ocr_warnings);
     }
@@ -136,7 +139,7 @@ class InvoiceOcrProcessingTest extends TestCase
 
         for ($attempt = 1; $attempt <= 3; $attempt++) {
             try {
-                $job->handle(app(OcrProvider::class), app(InvoiceTotalsConsistencyChecker::class));
+                $this->handleOcr($job);
                 $this->fail('A temporary provider error should be rethrown so Laravel can retry the job.');
             } catch (OcrProviderException $caught) {
                 $exception = $caught;
@@ -163,10 +166,7 @@ class InvoiceOcrProcessingTest extends TestCase
         $otherCompany = Company::factory()->create();
         Http::preventStrayRequests();
 
-        (new ProcessInvoiceOcr($invoice->id, $otherCompany->id))->handle(
-            app(OcrProvider::class),
-            app(InvoiceTotalsConsistencyChecker::class),
-        );
+        $this->handleOcr(new ProcessInvoiceOcr($invoice->id, $otherCompany->id));
 
         $invoice->refresh();
         $this->assertSame('ocr_queued', $invoice->status);
@@ -249,13 +249,15 @@ class InvoiceOcrProcessingTest extends TestCase
         $this->runJob($invoice);
 
         $invoice->refresh();
-        $this->assertSame('ocr_completed', $invoice->status);
+        $this->assertSame('data_extraction', $invoice->status);
         $this->assertSame('ocr.space-engine-3', $invoice->ocr_model);
-        $this->assertSame($ocrText, $invoice->description);
+        $this->assertNull($invoice->description);
+        $this->assertSame($ocrText, $invoice->ocr_text);
         $this->assertNull($invoice->supplier_name);
         $this->assertNull($invoice->invoice_number);
         $this->assertNull($invoice->total_amount);
-        $this->assertSame(['invoice_totals_unverified'], $invoice->ocr_warnings);
+        $this->assertSame([], $invoice->ocr_warnings);
+        $this->assertNull($invoice->ocr_data);
         $this->assertSame([], $invoice->lines()->get()->all());
         $this->assertSame(1, $invoice->ocr_usage['pages_processed']);
         $this->assertSame(451, $invoice->ocr_usage['processing_time_ms']);
@@ -337,9 +339,17 @@ class InvoiceOcrProcessingTest extends TestCase
 
     private function runJob(Invoice $invoice): void
     {
-        (new ProcessInvoiceOcr($invoice->id, $invoice->company_id))->handle(
+        $this->handleOcr(new ProcessInvoiceOcr($invoice->id, $invoice->company_id));
+    }
+
+    private function handleOcr(ProcessInvoiceOcr $job): void
+    {
+        $job->handle(
             app(OcrProvider::class),
+            app(InvoiceDataCompletenessChecker::class),
+            app(InvoiceDataPersistence::class),
             app(InvoiceTotalsConsistencyChecker::class),
+            app(InvoiceProcessingErrorMessage::class),
         );
     }
 

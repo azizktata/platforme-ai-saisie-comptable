@@ -238,7 +238,6 @@ class OcrSpaceProvider implements OcrProvider
 
         // OCR.space returns text, not invoice JSON; do not guess structured fields from it.
         $invoiceData = $this->schema->emptyAnnotation();
-        $invoiceData['description'] = mb_substr($extractedText, 0, 10000);
 
         return new InvoiceOcrResult(
             response: $providerResponse,
@@ -250,6 +249,8 @@ class OcrSpaceProvider implements OcrProvider
                     ? (int) $providerResponse['ProcessingTimeInMilliseconds']
                     : null,
             ],
+            text: $extractedText,
+            hasStructuredData: false,
         );
     }
 

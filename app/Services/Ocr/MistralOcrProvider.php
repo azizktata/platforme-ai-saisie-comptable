@@ -186,11 +186,17 @@ class MistralOcrProvider implements OcrProvider
             );
         }
 
+        $textPages = array_values(array_filter(array_map(
+            fn (array $page): string => trim((string) ($page['markdown'] ?? '')),
+            array_filter($providerResponse['pages'], 'is_array'),
+        ), fn (string $page): bool => $page !== ''));
+
         return new InvoiceOcrResult(
             response: $providerResponse,
             invoiceData: $invoiceData,
             model: $providerResponse['model'],
             usage: is_array($providerResponse['usage_info'] ?? null) ? $providerResponse['usage_info'] : [],
+            text: $textPages === [] ? null : implode("\n\n", $textPages),
         );
     }
 

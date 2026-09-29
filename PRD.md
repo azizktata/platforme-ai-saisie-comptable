@@ -2,43 +2,40 @@
 
 ## Source de vérité et état
 
-Le cahier des charges et le prompt d’implémentation fournis par le client sont désormais consignés dans [`docs/requirements.md`](docs/requirements.md) et pilotent les décisions du produit. Ils remplacent le périmètre provisoire de saisie manuelle livré dans le premier commit.
+Le cahier des charges fourni par le client est consigné dans [`docs/requirements.md`](docs/requirements.md). La dernière demande remplace la proposition initiale Mistral Small : OCR.space Free Engine 3 reste l’OCR par défaut, OpenRouter `openrouter/free` structure le texte OCR et produit l’analyse comptable ; Mistral OCR reste sélectionnable pour fournir directement les données structurées.
 
-**État actuel : les Phases 1 à 4 sont implémentées ; leur exécution Laravel reste à vérifier dans un environnement PHP/Composer.** La fondation multi-cabinet inclut l’inscription d’un cabinet et de son premier administrateur, les paramètres de cabinet, les rôles/affectations, un catalogue d’activités prédéfinies et personnalisées par cabinet, ainsi que des retours toast. La Phase 2 fournit les référentiels comptables par société et des données d’exemple. Les Phases 3–4 fournissent l’intake privé des factures, l’OCR asynchrone configurable (OCR.space Engine 3 par défaut, Mistral conservé pour l’offre Pro), les états/erreurs, les avertissements de totaux, les espaces globaux « Factures » et « Données comptables », l’historique facture par société, l’export CSV de la sélection et le suivi de vérification de l’extraction OCR. OCR.space Free fournit actuellement une transcription textuelle sans structuration automatique des champs facture. Aucune base Sage ni fichier `.mae` réel n’a été fourni. PHP/Composer ne sont pas disponibles dans l’environnement de travail actuel : les migrations et tests Laravel n’y ont pas été exécutés.
+**État actuel : Phases 1 à 5 implémentées au niveau applicatif ; les migrations/tests Laravel demandent une validation dans un environnement PHP/Composer.** La Phase 5 ajoute extraction structurée, complétude et correction humaine, propositions tenant-scoped, avertissements et validation/rejet humains. Le build TypeScript passe ; PHP/Composer ne sont pas installés dans l’environnement de travail courant.
 
 ## Vision
 
-Transformer une facture fournisseur en proposition comptable vérifiable et contextualisée, en tenant compte du profil de l’entreprise et des comptes réellement présents dans son dossier Sage. Une personne reste responsable de la revue et de la validation. L’IA ne modifie jamais directement les écritures finales.
+Transformer une facture fournisseur en proposition comptable vérifiable, contextualisée aux données comptables de la société. Une personne reste responsable de la revue. L’IA ne modifie jamais directement une écriture définitive ; une écriture n’est créée qu’après confirmation humaine explicite.
 
 ## Personnes et accès
 
 - **Administrateur de cabinet (`cabinet_admin`)** : gère le cabinet, ses sociétés et ses utilisateurs ; accès administratif à toutes les sociétés de son cabinet.
 - **Gestionnaire de factures (`invoice_manager`)** : traite les factures des sociétés qui lui sont affectées.
-- **Utilisateur société (`company_user`)** : consulte/revoit les sociétés affectées sans pouvoir gérer le cabinet.
-- `users.cabinet_id` rattache un utilisateur à son cabinet ; `users` ne porte pas un `company_id` unique.
-- Les droits au niveau société sont stockés dans `company_user_access`; toute requête métier doit vérifier cabinet **et** accès société.
+- **Utilisateur société (`company_user`)** : consulte les sociétés affectées sans pouvoir gérer le cabinet.
+- `users.cabinet_id` rattache un utilisateur à son cabinet ; les accès société résident dans `company_user_access`.
+- Toute donnée facture, comptable, option de formulaire ou mutation est limitée à la société autorisée.
 
-## Parcours fonctionnel cible
+## Parcours fonctionnel livré
 
-1. L’administrateur configure les sociétés, les membres et les accès.
-2. Les données de référence comptables de chaque société sont importées ou mockées à partir de Sage.
-3. Un membre téléverse un ou plusieurs fichiers ; chaque fichier est persisté en privé et traité dans son propre job.
-4. Le provider OCR configurable transcrit le document ; OCR.space Free Engine 3 est actif par défaut et conserve le texte brut, tandis que Mistral est gardé pour l’extraction structurée de l’offre Pro.
-5. L’analyse Mistral Small utilise seulement le contexte comptable de la société concernée.
-6. La proposition est validée par schéma et contrôles déterministes, puis affichée avec le document source, les scores/confiance et les alertes.
-7. Le comptable modifie/accepte/rejette la proposition. Seule une validation humaine crée/finalise l’écriture.
-8. Les corrections confirmées peuvent enrichir la mémoire configurable de cette société.
+1. L’utilisateur autorisé importe un document dans le stockage privé ; chaque facture possède son état et son job.
+2. OCR.space Engine 3 Free transcrit la facture par défaut ; Mistral demeure configurable. Le texte OCR et la réponse brute sont consultables/audités.
+3. OpenRouter `openrouter/free` structure la transcription OCR.space conformément au schéma de facture. Les champs incomplets sont visibles et corrigibles ; ils bloquent l’analyse comptable. Le chemin Mistral conserve sa structure directe.
+4. Une fois complète, une seconde requête OpenRouter analyse la facture en utilisant uniquement les référentiels actifs, le profil et l’historique récent de la société.
+5. Les données et la proposition sont affichées avec les avertissements, les codes autorisés et les contrôles d’équilibre/total. Un gestionnaire peut corriger ou rejeter. Les corrections sont auditées et chaque nouvelle analyse conserve la version précédente.
+6. Seule la validation humaine explicite crée une écriture comptable liée à la facture. L’export Sage réel est différé jusqu’à inspection du format `.mae` et de la version Sage.
 
 ## Règles produit
 
-- Import simultané PDF, JPG/JPEG et PNG ; un échec de fichier ne bloque pas les autres.
-- Un fournisseur non apparié reste possible (`invoices.third_party_id` nullable).
-- Les comptes et codes sont des chaînes, jamais convertis en entiers ; l’IA ne propose que des comptes existants de la société.
-- L’écriture comptable est à lignes débit/crédit ; l’équilibre, les références, la TVA, la devise et les doublons sont vérifiés côté serveur.
-- Les appels OCR/analyse sont asynchrones et isolés derrière des services fournisseurs remplaçables.
-- L’extraction OCR peut être marquée « vérifiée » pour la traçabilité ; cette action n’est pas une validation comptable et ne crée pas d’écriture.
-- Les interactions IA ne conservent que les éléments nécessaires à la traçabilité ; pas de prompts ou données sensibles complets sans nécessité.
-- L’intégration Sage réelle et le traitement `.mae` restent à préciser après inspection du fichier et de la version de Sage.
+- Import PDF/JPG/JPEG/PNG en lot ; un fichier échoué ne bloque pas les autres.
+- Un fournisseur non apparié reste possible (`invoices.third_party_id` nullable) ; aucun tiers ou compte n’est créé automatiquement.
+- Les comptes/codes sont des chaînes ; l’IA ne peut sélectionner que les référentiels actifs de la société liée.
+- Les montants sont stockés à trois décimales et vérifiés au millime, sans correction automatique. Les erreurs/incohérences restent visibles.
+- OCR brut, transcription, réponses de structuration et de proposition sont conservés séparément ; les secrets et prompts ne sont pas écrits dans les logs.
+- Une validation de proposition revérifie l’équilibre, le total, les champs requis, l’état des références et le tenant, et ne peut créer qu’une écriture liée par facture.
+- La mémoire des corrections, l’import/export Sage réel et les règles exhaustives de fiscalité/avoirs restent différés.
 
 ## Statut des fonctionnalités
 
@@ -47,7 +44,7 @@ Transformer une facture fournisseur en proposition comptable vérifiable et cont
 | 1 | Auth, inscription, cabinets, sociétés, utilisateurs, rôles, catalogue d’activités et contrôle d’accès | Implémentée ; tests Laravel à exécuter |
 | 2 | Référentiels comptables et données d’exemple par société, navigation globale | Implémentée avec données fictives ; intégration Sage réelle différée |
 | 3 | Schéma facture/lignes, intake multi-fichier, stockage privé, doublons, workspace et historique | Implémentée ; tests Laravel à exécuter |
-| 4 | OCR provider interchangeable, jobs, états, revue de l’extraction et cohérence des totaux | OCR.space Free Engine 3 est actif par défaut (texte brut) ; Mistral structuré reste sélectionnable pour l’offre Pro ; tests Laravel à exécuter |
-| 5 | Proposition comptable, contrôles et validation humaine d’écriture | À faire |
+| 4 | OCR interchangeable, états, erreurs, audit OCR et contrôles de totaux | OCR.space Free Engine 3 par défaut ; Mistral reste sélectionnable ; tests Laravel à exécuter |
+| 5 | OpenRouter extraction, blocage/correction des champs incomplets, analyse contextualisée, proposition, revue/rejet/validation humaine | Implémentée ; migrations et tests Laravel à exécuter avec PHP/Composer |
 
-Les critères détaillés, champs OCR, diagramme ERD, contrôles et stack sont dans [`docs/requirements.md`](docs/requirements.md). Chaque module conserve son PRD et son README technique sous `docs/modules/`.
+Les PRD/README module se trouvent sous `docs/modules/`. La Phase 2 utilise un jeu fictif de données type Sage ; aucune base réelle ni fichier `.mae` n’a été fourni.

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\AccountingDataController;
+use App\Http\Controllers\AccountingProposalController;
 use App\Http\Controllers\AuthenticatedSessionController;
 use App\Http\Controllers\CabinetActivityController;
 use App\Http\Controllers\CabinetSettingsController;
@@ -37,6 +38,16 @@ Route::middleware('auth')->group(function (): void {
         ->name('companies.invoices.index');
     Route::post('/companies/{company}/invoices/upload', [InvoiceController::class, 'upload'])
         ->name('companies.invoices.upload');
+    Route::get('/companies/{company}/invoices/{invoice}/details', [InvoiceController::class, 'details'])
+        ->name('companies.invoices.details');
+    Route::put('/companies/{company}/invoices/{invoice}/extraction', [InvoiceController::class, 'saveExtraction'])
+        ->name('companies.invoices.extraction.update');
+    Route::put('/companies/{company}/invoices/{invoice}/proposal', [AccountingProposalController::class, 'update'])
+        ->name('companies.invoices.proposal.update');
+    Route::post('/companies/{company}/invoices/{invoice}/proposal/approve', [AccountingProposalController::class, 'approve'])
+        ->name('companies.invoices.proposal.approve');
+    Route::post('/companies/{company}/invoices/{invoice}/proposal/reject', [AccountingProposalController::class, 'reject'])
+        ->name('companies.invoices.proposal.reject');
     Route::post('/companies/{company}/invoices/{invoice}/ocr/retry', [InvoiceController::class, 'retryOcr'])
         ->name('companies.invoices.ocr.retry');
     Route::post('/companies/{company}/invoices/bulk-review', [InvoiceController::class, 'bulkReview'])
