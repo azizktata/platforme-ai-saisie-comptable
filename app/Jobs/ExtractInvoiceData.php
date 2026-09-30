@@ -27,7 +27,7 @@ class ExtractInvoiceData implements ShouldQueue, ShouldBeUnique
     use Queueable;
     use SerializesModels;
 
-    public int $tries = 3;
+    public int $tries = 4;
 
     public int $timeout = 180;
 
@@ -49,7 +49,7 @@ class ExtractInvoiceData implements ShouldQueue, ShouldBeUnique
 
     public function backoff(): array
     {
-        return [30, 120];
+        return [60, 300, 900];
     }
 
     public function handle(
@@ -104,7 +104,7 @@ class ExtractInvoiceData implements ShouldQueue, ShouldBeUnique
             $missingFields = $completenessChecker->missingFields($result->invoiceData);
             $warnings = [
                 ...$totalsChecker->warnings($result->invoiceData),
-                ...$missingFields,
+                ...$completenessChecker->warnings($result->invoiceData),
             ];
 
             AccountingProposal::query()

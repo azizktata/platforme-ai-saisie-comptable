@@ -52,13 +52,10 @@ class AccountingProposalController extends Controller
                 ]);
             }
 
-            $existingConfidence = $proposal->lines()
-                ->get(['id', 'confidence'])
-                ->mapWithKeys(fn ($line): array => [$line->id => $line->confidence])
-                ->all();
+            $existingLineIds = $proposal->lines()->pluck('id')->mapWithKeys(fn ($id): array => [(int) $id => true])->all();
 
             foreach ($data['lines'] as $line) {
-                if (isset($line['id']) && ! array_key_exists((int) $line['id'], $existingConfidence)) {
+                if (isset($line['id']) && ! array_key_exists((int) $line['id'], $existingLineIds)) {
                     throw ValidationException::withMessages([
                         'lines' => 'Une ligne sélectionnée n’appartient pas à cette proposition.',
                     ]);
@@ -83,7 +80,6 @@ class AccountingProposalController extends Controller
                     'description' => $line['description'] === null ? null : trim($line['description']),
                     'debit' => $line['debit'],
                     'credit' => $line['credit'],
-                    'confidence' => isset($line['id']) ? $existingConfidence[(int) $line['id']] : null,
                 ]);
             }
 
@@ -106,7 +102,7 @@ class AccountingProposalController extends Controller
         DB::transaction(function () use ($company, $invoice, $completenessChecker): void {
             $lockedInvoice = $company->invoices()->whereKey($invoice->id)->lockForUpdate()->firstOrFail();
 
-            if (! in_array($lockedInvoice->status, ['proposal_ready', 'proposal_rejected', 'accounting_analysis_failed'], true)
+            if (! in_array($lockedInvoice->status, ['ocr_completed', 'proposal_ready', 'proposal_rejected', 'accounting_analysis_failed'], true)
                 || $lockedInvoice->journalEntry()->exists()) {
                 throw ValidationException::withMessages([
                     'proposal' => 'La proposition ne peut pas être régénérée à cette étape ou une écriture existe déjà.',
@@ -214,6 +210,13 @@ class AccountingProposalController extends Controller
                 throw ValidationException::withMessages([
                     'proposal' => 'Complétez les informations obligatoires de la facture avant de valider la proposition.',
                 ]);
+            }
+
+            if ($company->fiscal_year_start !== null && $company->fiscal_year_end !== null) {
+                $invoiceDate = $lockedInvoice->invoice_date?->toDateString();
+                if ($invoiceDate === null || $invoiceDate < $company->fiscal_year_start->toDateString() || $invoiceDate > $company->fiscal_year_end->toDateString()) {
+                    throw ValidationException::withMessages(['proposal' => 'La date de facture est absente ou hors de l’exercice fiscal configuré pour cette société.']);
+                }
             }
 
             $invoiceTotalWarnings = $totalsChecker->warnings($lockedInvoice->ocr_data ?? []);

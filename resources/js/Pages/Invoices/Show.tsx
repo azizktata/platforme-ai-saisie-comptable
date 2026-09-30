@@ -47,17 +47,19 @@ export default function InvoiceShow({ company, invoice, back_url, auth }: Props)
           </Link>
         </header>
 
-        <div className="grid grid-cols-1 gap-4 xl:h-[calc(100vh-11rem)] xl:min-h-[680px] xl:grid-cols-[minmax(0,0.96fr)_minmax(0,1.04fr)]">
-          <div className="flex min-h-0 flex-col gap-3 xl:h-full">
-            <div className="min-h-[420px] flex-1 xl:min-h-0">
-              <InvoiceDocumentViewer
-                filename={invoice.original_filename}
-                mimeType={invoice.mime_type}
-                previewUrl={invoice.preview_url}
-                downloadUrl={invoice.download_url}
-              />
+        <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,0.96fr)_minmax(0,1.04fr)]">
+          <div className="min-w-0 self-stretch">
+            <div className="space-y-3 xl:sticky xl:top-4 xl:self-start">
+              <div className="min-h-[420px]">
+                <InvoiceDocumentViewer
+                  filename={invoice.original_filename}
+                  mimeType={invoice.mime_type}
+                  previewUrl={invoice.preview_url}
+                  downloadUrl={invoice.download_url}
+                />
+              </div>
+              <InvoiceSnapshot detail={reviewDetail} currency={company.currency} />
             </div>
-            <InvoiceSnapshot detail={reviewDetail} currency={company.currency} />
           </div>
           <InvoiceReviewPanel
             companyId={company.id}

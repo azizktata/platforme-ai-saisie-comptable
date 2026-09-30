@@ -10,7 +10,6 @@ import {
   RotateCcw,
   Sparkles,
   Upload,
-  X,
   type LucideIcon,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -29,11 +28,11 @@ type InvoiceSummary = {
   currency: string | null;
   description: string | null;
   status: string;
-  proposal_confidence: number | null;
   ocr_attempts: number;
   ocr_error_message: string | null;
   ocr_warnings: string[];
   ocr_reviewed_at: string | null;
+  confidence: number | null;
   accounting_exported_at: string | null;
   created_at: string;
   download_url: string;
@@ -100,14 +99,10 @@ export default function InvoicesIndex({
   auth,
 }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
-  const uploadSection = useRef<HTMLElement>(null);
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isAnalyzingAll, setIsAnalyzingAll] = useState(false);
-  const [isLoadingExample, setIsLoadingExample] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ completed: 0, total: 0 });
-  const [confirmDuplicates, setConfirmDuplicates] = useState(false);
   const [uploadFailures, setUploadFailures] = useState<InvoiceUploadFailure[]>([]);
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<number[]>([]);
   const invoiceRows = invoices?.data ?? [];
@@ -133,11 +128,8 @@ export default function InvoicesIndex({
   }, [company?.id, invoices?.current_page, mode]);
 
   useEffect(() => {
-    setSelectedFiles([]);
     setUploadFailures([]);
-    setConfirmDuplicates(false);
     setIsDragging(false);
-    setIsLoadingExample(false);
     if (fileInput.current) fileInput.current.value = '';
   }, [company?.id, mode]);
 
@@ -221,68 +213,20 @@ export default function InvoicesIndex({
     toast.success(`${selected.length} facture${selected.length > 1 ? 's exportées' : ' exportée'} en CSV.`);
   };
 
-  const chooseFiles = (files: FileList | null) => {
-    const nextFiles = Array.from(files ?? []);
-
-    if (nextFiles.length > MAX_FILES_PER_BATCH) {
-      toast.error(`Sélectionnez au maximum ${MAX_FILES_PER_BATCH} fichiers par lot.`);
-      setSelectedFiles([]);
-      if (fileInput.current) fileInput.current.value = '';
-      return;
-    }
-
-    setSelectedFiles(nextFiles);
-    setUploadFailures([]);
-    setUploadProgress({ completed: 0, total: 0 });
+  const clearWorkspace = () => {
+    if (!company || !invoiceRows.length || !window.confirm('Vider votre espace de travail ? Les factures resteront dans l’historique complet de la société et ne seront pas supprimées.')) return;
+    router.post(`/companies/${company.id}/invoices/clear-workspace`, {}, {
+      preserveScroll: true,
+      onSuccess: () => {
+        setSelectedInvoiceIds([]);
+        toast.success('Espace vidé. Les documents restent disponibles dans l’historique complet.');
+      },
+      onError: () => toast.error('L’espace de travail n’a pas pu être vidé. Réessayez.'),
+    });
   };
 
-  const loadExampleInvoice = async () => {
-    if (isLoadingExample || isUploading) return;
-
-    if (selectedFiles.some((file) => file.name === 'facture-exemple.pdf')) {
-      toast.info('La facture exemple figure déjà dans la sélection.');
-      uploadSection.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      return;
-    }
-
-    if (selectedFiles.length >= MAX_FILES_PER_BATCH) {
-      toast.error(`Le lot est déjà limité à ${MAX_FILES_PER_BATCH} fichiers.`);
-      return;
-    }
-
-    setIsLoadingExample(true);
-
-    try {
-      const response = await fetch('/examples/facture-exemple.pdf', { credentials: 'same-origin' });
-      if (!response.ok) throw new Error('Le fichier exemple est indisponible.');
-
-      const file = new File([await response.blob()], 'facture-exemple.pdf', { type: 'application/pdf' });
-      setSelectedFiles((current) => [...current, file]);
-      setUploadFailures([]);
-      setUploadProgress({ completed: 0, total: 0 });
-      toast.success('La facture exemple est prête. Cliquez sur « Importer » pour lancer son traitement automatique.');
-      uploadSection.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    } catch {
-      toast.error('La facture exemple n’a pas pu être chargée. Réessayez.');
-    } finally {
-      setIsLoadingExample(false);
-    }
-  };
-
-  const scrollToUploader = () => {
-    uploadSection.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    window.setTimeout(() => fileInput.current?.click(), 200);
-  };
-
-  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setIsDragging(false);
-    if (isUploading) return;
-    chooseFiles(event.dataTransfer.files);
-  };
-
-  const uploadFiles = async () => {
-    if (!company || !selectedFiles.length || isUploading) return;
+  const uploadFiles = async (batch: File[]) => {
+    if (!company || !batch.length || isUploading) return;
 
     const csrfToken = document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content;
     if (!csrfToken) {
@@ -290,7 +234,6 @@ export default function InvoicesIndex({
       return;
     }
 
-    const batch = selectedFiles;
     const failures: InvoiceUploadFailure[] = [];
     let successfulUploads = 0;
 
@@ -301,8 +244,6 @@ export default function InvoicesIndex({
     for (const [index, file] of batch.entries()) {
       const body = new FormData();
       body.append('file', file, file.name);
-      if (confirmDuplicates) body.append('confirm_duplicate', '1');
-
       try {
         const response = await fetch(`/companies/${company.id}/invoices/upload`, {
           method: 'POST',
@@ -324,7 +265,7 @@ export default function InvoicesIndex({
         } else {
           failures.push({
             filename: file.name,
-            message: payload?.errors?.file?.[0] || payload?.message || 'Le fichier n’a pas pu être importé.',
+            message: payload?.errors?.file?.[0] || payload?.message || 'Le fichier n’a pas pu être importé. S’il s’agit d’un doublon, vérifiez-le dans l’historique.',
           });
         }
       } catch {
@@ -336,8 +277,6 @@ export default function InvoicesIndex({
 
     setUploadFailures(failures);
     setIsUploading(false);
-    setSelectedFiles([]);
-    setConfirmDuplicates(false);
     if (fileInput.current) fileInput.current.value = '';
 
     if (successfulUploads > 0) {
@@ -348,6 +287,26 @@ export default function InvoicesIndex({
     if (failures.length > 0) {
       toast.error(`${failures.length} fichier${failures.length > 1 ? 's' : ''} à vérifier. Les autres imports ne sont pas bloqués.`);
     }
+  };
+
+  const chooseFiles = (files: FileList | null) => {
+    const nextFiles = Array.from(files ?? []);
+    if (nextFiles.length === 0 || isUploading) return;
+    if (nextFiles.length > MAX_FILES_PER_BATCH) {
+      toast.error(`Sélectionnez au maximum ${MAX_FILES_PER_BATCH} fichiers par lot.`);
+      if (fileInput.current) fileInput.current.value = '';
+      return;
+    }
+    setUploadFailures([]);
+    setUploadProgress({ completed: 0, total: 0 });
+    if (fileInput.current) fileInput.current.value = '';
+    void uploadFiles(nextFiles);
+  };
+
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
+    if (!isUploading) chooseFiles(event.dataTransfer.files);
   };
 
   const onLogout = auth?.user ? () => router.post('/logout', {}, {
@@ -387,7 +346,7 @@ export default function InvoicesIndex({
                 <select
                   className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-100 disabled:cursor-not-allowed disabled:bg-slate-100"
                   value={company?.id ?? ''}
-                  disabled={isUploading || isLoadingExample}
+                  disabled={isUploading}
                   onChange={(event) => router.get('/invoices', event.target.value ? { company_id: Number(event.target.value) } : {}, { preserveScroll: true, replace: true })}
                 >
                   <option value="" disabled={companies.length > 0}>Sélectionner une société</option>
@@ -406,43 +365,16 @@ export default function InvoicesIndex({
                 {isAnalyzingAll ? 'Mise en file…' : `Tout analyser${invoiceStats?.to_analyze ? ` · ${invoiceStats.to_analyze}` : ''}`}
               </button>
             )}
-            {mode === 'workspace' && company && canUploadInvoices ? (
-              <button type="button" onClick={scrollToUploader} className="inline-flex items-center gap-2 rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800">
-                <Upload size={16} /> Importer des factures
-              </button>
-            ) : mode === 'history' && company ? (
-              <Link href={`/invoices?company_id=${company.id}`} className="inline-flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-4 py-2.5 text-sm font-semibold text-teal-800 hover:bg-teal-100">
-                <Upload size={16} /> Déposer des factures
-              </Link>
-            ) : null}
+            {mode === 'workspace' && company && <Link href={`/companies/${company.id}/invoices`} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:border-teal-300 hover:text-teal-800">Historique complet</Link>}
+            {mode === 'history' && company && <Link href={`/invoices?company_id=${company.id}`} className="inline-flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-4 py-2.5 text-sm font-semibold text-teal-800 hover:bg-teal-100">Espace de travail</Link>}
           </div>
         </header>
 
         {company && invoiceStats && <InvoiceStatsCards stats={invoiceStats} />}
 
         {mode === 'workspace' && company && canUploadInvoices ? (
-          <section ref={uploadSection} className="scroll-mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="flex items-start gap-3">
-                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700"><Upload size={20} /></span>
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-950">Importer des factures</h2>
-                  <p className="mt-1 max-w-2xl text-sm leading-5 text-slate-500">PDF, JPG, JPEG ou PNG · {formatFileSize(maxUploadFileSizeBytes)} maximum par fichier · jusqu’à {MAX_FILES_PER_BATCH} fichiers par lot.</p>
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <a href="/examples/facture-exemple.pdf" download className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:border-teal-300 hover:text-teal-800">
-                  <ArrowDownToLine size={14} /> Télécharger l’exemple
-                </a>
-                <button type="button" onClick={loadExampleInvoice} disabled={isLoadingExample || isUploading} className="inline-flex items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-900 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50">
-                  {isLoadingExample ? <LoaderCircle className="animate-spin" size={14} /> : <FileText size={14} />}
-                  {isLoadingExample ? 'Chargement…' : 'Charger un exemple'}
-                </button>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800">
-                  <Activity size={14} /> Analyse automatique après import
-                </span>
-              </div>
-            </div>
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <p className="mb-3 text-xs text-slate-500">PDF, JPG, JPEG ou PNG · {formatFileSize(maxUploadFileSizeBytes)} maximum par fichier · jusqu’à {MAX_FILES_PER_BATCH} fichiers par lot.</p>
 
             <input
               ref={fileInput}
@@ -475,38 +407,6 @@ export default function InvoicesIndex({
               </button>
             </div>
 
-            {selectedFiles.length > 0 && (
-              <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-semibold text-slate-800">{selectedFiles.length} fichier{selectedFiles.length > 1 ? 's' : ''} prêt{selectedFiles.length > 1 ? 's' : ''} · {formatFileSize(selectedFiles.reduce((sum, file) => sum + file.size, 0))}</p>
-                  {!isUploading && (
-                    <button type="button" onClick={() => chooseFiles(null)} className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-red-700">
-                      <X size={14} /> Effacer la sélection
-                    </button>
-                  )}
-                </div>
-                <ul className="mt-3 grid gap-1.5 text-xs text-slate-600 sm:grid-cols-2">
-                  {selectedFiles.slice(0, 6).map((file, index) => (
-                    <li key={`${file.name}-${index}`} className="flex min-w-0 items-center justify-between gap-3 rounded-md bg-slate-50 px-2.5 py-2">
-                      <span className="truncate" title={file.name}>{file.name}</span><span className="shrink-0 text-slate-400">{formatFileSize(file.size)}</span>
-                    </li>
-                  ))}
-                </ul>
-                {selectedFiles.length > 6 && <p className="mt-2 text-xs text-slate-400">et {selectedFiles.length - 6} autre{selectedFiles.length - 6 > 1 ? 's' : ''}…</p>}
-              </div>
-            )}
-
-            <label className="mt-4 flex cursor-pointer items-start gap-2.5 text-sm text-slate-600">
-              <input
-                type="checkbox"
-                checked={confirmDuplicates}
-                disabled={isUploading}
-                onChange={(event) => setConfirmDuplicates(event.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
-              />
-              <span>J’ai vérifié les doublons éventuels et souhaite importer quand même un fichier identique déjà enregistré.</span>
-            </label>
-
             {isUploading && (
               <div className="mt-4" role="status" aria-live="polite">
                 <div className="flex items-center justify-between text-xs font-medium text-slate-600">
@@ -518,22 +418,7 @@ export default function InvoicesIndex({
               </div>
             )}
 
-            <div className="mt-5 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={uploadFiles}
-                disabled={!selectedFiles.length || isUploading}
-                className="inline-flex items-center gap-2 rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isUploading ? <LoaderCircle className="animate-spin" size={17} /> : <Upload size={17} />}
-                {isUploading
-                  ? 'Import en cours…'
-                  : selectedFiles.length > 0
-                    ? `Importer ${selectedFiles.length} fichier${selectedFiles.length > 1 ? 's' : ''}`
-                    : 'Importer la sélection'}
-              </button>
-              <p className="text-xs leading-5 text-slate-500">Chaque import lance automatiquement OCR, extraction et analyse comptable. Les résultats restent à valider par un responsable.</p>
-            </div>
+            {isUploading && <p className="mt-3 text-xs font-medium text-teal-800">Les fichiers sont importés et le traitement démarre automatiquement.</p>}
 
             {uploadFailures.length > 0 && (
               <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4" role="alert">
@@ -561,7 +446,10 @@ export default function InvoicesIndex({
                 <h2 className="text-lg font-semibold text-slate-950">Factures de {company.name}</h2>
                 <p className="mt-1 text-sm text-slate-500">Ouvrez une facture pour contrôler l’original, les champs extraits et la proposition comptable.</p>
               </div>
-              <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600">{invoices.total} document{invoices.total === 1 ? '' : 's'}</span>
+              <div className="flex items-center gap-2">
+                {mode === 'workspace' && canReviewInvoices && invoices.total > 0 && <button type="button" onClick={clearWorkspace} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:border-amber-300 hover:text-amber-800">Vider mon espace</button>}
+                <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600">{invoices.total} document{invoices.total === 1 ? '' : 's'}</span>
+              </div>
             </div>
 
             {mode === 'workspace' && selectedInvoiceIds.length > 0 && (
@@ -587,7 +475,7 @@ export default function InvoicesIndex({
                       <th className="px-5 py-3 font-semibold">N° facture</th>
                       <th className="px-5 py-3 font-semibold">Date</th>
                       <th className="px-5 py-3 text-right font-semibold">Total TTC</th>
-                      <th className="px-5 py-3 font-semibold" title="Moyenne des confiances des lignes de la proposition comptable">Confiance IA</th>
+                      <th className="px-5 py-3 text-right font-semibold">Confiance</th>
                       <th className="px-5 py-3 font-semibold">État</th>
                       <th className="px-5 py-3 text-right font-semibold">Actions</th>
                     </tr>
@@ -599,42 +487,34 @@ export default function InvoicesIndex({
                         <td className="min-w-56 px-5 py-4">
                           <Link href={`/companies/${company.id}/invoices/${invoice.id}`} className="block max-w-72 truncate font-semibold text-slate-900 hover:text-teal-800 hover:underline" title={invoice.original_filename}>{invoice.original_filename}</Link>
                           <span className="mt-1 block text-xs text-slate-400">{formatFileSize(invoice.size_bytes)} · {formatTimestamp(invoice.created_at)}</span>
-                          {!['uploaded', 'ocr_queued', 'ocr_processing'].includes(invoice.status) && (
-                            <Link href={`/companies/${company.id}/invoices/${invoice.id}#ocr-text`} className="mt-1 inline-block text-xs font-medium text-teal-700 hover:text-teal-900">Afficher le texte OCR</Link>
-                          )}
                         </td>
                         <td className="px-5 py-4 text-slate-700">{invoice.supplier_name || <span className="text-slate-400">À identifier</span>}</td>
                         <td className="px-5 py-4 font-mono text-xs text-slate-600">{invoice.invoice_number || '—'}</td>
                         <td className="whitespace-nowrap px-5 py-4 text-slate-600">{invoice.invoice_date ? formatDate(invoice.invoice_date) : '—'}</td>
                         <td className="whitespace-nowrap px-5 py-4 text-right font-semibold tabular-nums text-slate-900">{formatAmount(invoice.total_amount, invoice.currency || company.currency || 'TND')}</td>
-                        <td className="whitespace-nowrap px-5 py-4">
-                          {invoice.proposal_confidence === null
-                            ? <span className="text-xs text-slate-400">Non disponible</span>
-                            : <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${invoice.proposal_confidence < 0.6 ? 'bg-amber-50 text-amber-800' : 'bg-teal-50 text-teal-800'}`}><Sparkles size={12} />{Math.round(invoice.proposal_confidence * 100)}%</span>}
-                        </td>
-                        <td className="min-w-44 px-5 py-4">
+                        <td className="whitespace-nowrap px-5 py-4 text-right tabular-nums text-slate-700">{invoice.confidence === null ? <span className="text-slate-400">—</span> : `${Math.round(invoice.confidence * 100)}%`}</td>
+                        <td className="min-w-40 px-5 py-4">
                           <StatusBadge status={invoice.status} reviewedAt={invoice.ocr_reviewed_at} exportedAt={invoice.accounting_exported_at} />
                           {retryableStatuses.includes(invoice.status) && (
-                            <p className="mt-1 max-w-60 text-xs leading-4 text-red-700">
-                              {invoice.ocr_error_message || 'Le traitement de cette facture a échoué.'}
-                              {invoice.ocr_attempts > 0 && <span className="block text-red-600">Tentatives : {invoice.ocr_attempts}</span>}
+                            <p className="mt-1 text-[11px] leading-4 text-amber-700">
+                              Traitement à relancer
                             </p>
                           )}
-                          {invoice.ocr_warnings.includes('invoice_total_mismatch') && <p className="mt-1 max-w-60 text-xs leading-4 text-red-700">Incohérence de total à vérifier.</p>}
-                          {invoice.ocr_warnings.includes('invoice_totals_unverified') && <p className="mt-1 max-w-60 text-xs leading-4 text-amber-800">Contrôle des totaux non conclusif.</p>}
+                          {invoice.ocr_warnings.some((warning) => warning.includes('mismatch')) && <p className="mt-1 text-[11px] leading-4 text-amber-700">Montants à contrôler</p>}
+                          {invoice.ocr_warnings.includes('invoice_totals_unverified') && <p className="mt-1 text-[11px] leading-4 text-amber-700">Totaux à vérifier</p>}
                         </td>
-                        <td className="min-w-52 px-5 py-4 text-right">
-                          <div className="flex flex-wrap justify-end gap-2">
+                        <td className="whitespace-nowrap px-5 py-4 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
                             {canReviewInvoices && retryableStatuses.includes(invoice.status) && (
-                              <button type="button" onClick={() => retryAnalysis(invoice.id)} className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 px-2.5 py-2 text-xs font-semibold text-amber-900 hover:bg-amber-50">
-                                <RotateCcw size={14} /> {retryLabel(invoice.status)}
+                              <button type="button" onClick={() => retryAnalysis(invoice.id)} title={retryLabel(invoice.status)} aria-label={retryLabel(invoice.status)} className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-amber-200 text-amber-800 hover:bg-amber-50">
+                                <RotateCcw size={15} />
                               </button>
                             )}
-                            <Link href={`/companies/${company.id}/invoices/${invoice.id}`} className="inline-flex items-center gap-1.5 rounded-md bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800">
-                              <Eye size={14} /> Ouvrir
+                            <Link href={`/companies/${company.id}/invoices/${invoice.id}`} title="Ouvrir la facture" aria-label={`Ouvrir ${invoice.original_filename}`} className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-teal-700 text-white hover:bg-teal-800">
+                              <Eye size={15} />
                             </Link>
-                            <a href={invoice.download_url} className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-2 text-xs font-semibold text-slate-700 hover:border-teal-300 hover:text-teal-800" aria-label={`Télécharger ${invoice.original_filename}`}>
-                              <ArrowDownToLine size={14} />
+                            <a href={invoice.download_url} title="Télécharger le document" className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-700 hover:border-teal-300 hover:text-teal-800" aria-label={`Télécharger ${invoice.original_filename}`}>
+                              <ArrowDownToLine size={15} />
                             </a>
                           </div>
                         </td>
@@ -648,7 +528,6 @@ export default function InvoicesIndex({
                 <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400"><FileText size={23} /></span>
                 <h3 className="mt-3 font-semibold text-slate-900">Aucune facture importée</h3>
                 <p className="mx-auto mt-1 max-w-lg text-sm text-slate-500">Les factures ajoutées à cette société apparaîtront ici. Déposez vos documents dans la zone d’import ci-dessus pour commencer.</p>
-                {canUploadInvoices && <button type="button" onClick={scrollToUploader} className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-teal-800 hover:text-teal-950"><Upload size={15} /> Importer une facture</button>}
               </div>
             )}
 
@@ -688,11 +567,11 @@ function InvoiceStatsCards({ stats }: { stats: InvoiceStats }) {
 function StatusBadge({ status, reviewedAt, exportedAt }: { status: string; reviewedAt: string | null; exportedAt: string | null }) {
   const labels: Record<string, string> = {
     uploaded: 'À analyser',
-    ocr_queued: 'En analyse · file OCR',
-    ocr_processing: 'En analyse · OCR',
-    data_extraction: 'En analyse · extraction',
+    ocr_queued: 'En analyse',
+    ocr_processing: 'En analyse',
+    data_extraction: 'En analyse',
     invoice_incomplete: 'À compléter',
-    accounting_analysis: 'En analyse · comptes',
+    accounting_analysis: 'En analyse',
     proposal_ready: 'À vérifier',
     accounting_validated: 'Validée',
     accounting_exported: 'Exportée',

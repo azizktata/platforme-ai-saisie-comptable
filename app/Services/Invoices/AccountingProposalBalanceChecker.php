@@ -15,7 +15,6 @@ class AccountingProposalBalanceChecker
         $debit = 0;
         $credit = 0;
         $count = 0;
-        $lowConfidence = false;
         $supplierAssigned = false;
 
         foreach ($lines as $line) {
@@ -23,11 +22,9 @@ class AccountingProposalBalanceChecker
             $lineDebit = is_array($line) ? ($line['debit'] ?? '0') : ($line->debit ?? '0');
             $lineCredit = is_array($line) ? ($line['credit'] ?? '0') : ($line->credit ?? '0');
             $lineThirdParty = is_array($line) ? ($line['third_party_id'] ?? null) : ($line->third_party_id ?? null);
-            $lineConfidence = is_array($line) ? ($line['confidence'] ?? null) : ($line->confidence ?? null);
             $debit += $this->toMilli((string) $lineDebit);
             $credit += $this->toMilli((string) $lineCredit);
             $supplierAssigned = $supplierAssigned || $lineThirdParty !== null;
-            $lowConfidence = $lowConfidence || ($lineConfidence !== null && (float) $lineConfidence < 0.6);
         }
 
         $warnings = [];
@@ -46,10 +43,6 @@ class AccountingProposalBalanceChecker
 
         if (! $supplierAssigned) {
             $warnings[] = 'supplier_not_linked';
-        }
-
-        if ($lowConfidence) {
-            $warnings[] = 'proposal_low_confidence';
         }
 
         if ($invoice->withholding_amount === null) {

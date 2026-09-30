@@ -25,6 +25,10 @@ export type CompanySummary = {
   sector: string | null;
   country_code?: string | null;
   currency: string | null;
+  vat_rates?: string[];
+  fiscal_year_start?: string | null;
+  fiscal_year_end?: string | null;
+  capitalization_threshold?: string | null;
   users_count: number;
   access_role: string | null;
 };

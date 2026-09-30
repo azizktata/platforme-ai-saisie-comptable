@@ -40,6 +40,8 @@ Route::middleware('auth')->group(function (): void {
         ->name('companies.invoices.upload');
     Route::post('/companies/{company}/invoices/analyze-all', [InvoiceController::class, 'analyzeAll'])
         ->name('companies.invoices.analyze-all');
+    Route::post('/companies/{company}/invoices/clear-workspace', [InvoiceController::class, 'clearWorkspace'])
+        ->name('companies.invoices.clear-workspace');
     Route::get('/companies/{company}/invoices/{invoice}', [InvoiceController::class, 'show'])
         ->name('companies.invoices.show');
     Route::get('/companies/{company}/invoices/{invoice}/preview', [InvoiceController::class, 'preview'])

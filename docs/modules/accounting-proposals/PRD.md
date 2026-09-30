@@ -31,10 +31,10 @@ Le panneau est organisé en cinq cartes numérotées : données extraites modifi
 
 - Équilibre débit/crédit et rapprochement du total des débits au TTC brut : calculs côté Laravel, sans ajouter la retenue au TTC.
 - TVA, totaux et net : TVA globale comparée au taux/base lorsqu’ils sont disponibles ; TTC vérifié avec les composants ; net comparé au TTC diminué de la retenue. Une incohérence connue est bloquante ; des données manquantes restent en attente.
-- Doublon : empreinte SHA-256 identique dans la société, signalée comme avertissement. Le contrôle des doublons par numéro de facture est indisponible (aucun registre n’est configuré).
+- Doublon : empreinte SHA-256 identique ou même numéro pour le même fournisseur dans la société, signalé comme avertissement. Le contrôle par numéro s’appuie sur les factures persistées.
 - Fournisseur/tiers et comptes, journaux, tiers et axes actifs : vérifications de société et statut côté serveur ; absence de tiers signalée.
 - Devise : égalité société/facture vérifiée ; si différente et sans taux de conversion, approbation bloquée.
-- Exercice fiscal : « non configuré » ; aucun modèle/configuration ne permet actuellement de valider cette règle.
+- Exercice fiscal : si les dates de début et de fin sont configurées sur la société, la date de facture est contrôlée et l’approbation est bloquée si elle est absente ou hors période ; sans configuration, le contrôle reste indisponible.
 
 ## Sécurité et audit
 
@@ -49,7 +49,7 @@ Le panneau est organisé en cinq cartes numérotées : données extraites modifi
 
 - `openrouter/free` sélectionne dynamiquement un modèle gratuit compatible avec la réponse structurée ; l’identifiant renvoyé est conservé pour audit.
 - La confiance affichée est la moyenne des confiances de proposition par ligne ; elle n’est pas un score OCR.
-- Le workspace actuel traite les factures fournisseurs et n’implémente pas encore les règles complètes d’avoirs/pro forma, la conversion multidevise ou un contrôle d’exercice fiscal configuré.
+- Le workspace actuel traite les factures fournisseurs et n’implémente pas encore les règles complètes d’avoirs/pro forma ou la conversion multidevise.
 - Les corrections ne nourrissent pas encore une mémoire apprenante. L’export Sage réel et l’import réel d’un `.mae` restent différés.
 
 ## Critères d’acceptation

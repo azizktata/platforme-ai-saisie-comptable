@@ -88,7 +88,6 @@ type ProposalLine = {
   description: string | null;
   debit: string;
   credit: string;
-  confidence: string | number | null;
 };
 
 type Proposal = {
@@ -105,7 +104,6 @@ type Proposal = {
   model: string;
   modified_at: string | null;
   journal_entry_id: number | null;
-  confidence: number | null;
   lines: ProposalLine[];
 };
 
@@ -132,14 +130,29 @@ type Options = {
   third_parties: { id: number; code: string; name: string }[];
   analytical_accounts: { id: number; code: string; label: string }[];
   invoice_types: { value: string; label: string }[];
+  vat_rates: string[];
 };
 
 type CheckStatus = 'passed' | 'warning' | 'blocking' | 'pending' | 'unavailable';
 type AccountingCheck = { status: CheckStatus; detail: string };
+type ConfidenceIndicator = { score: number | null; evidence: string[] };
+type ConfidenceAssessment = {
+  overall: number | null;
+  route: 'quick_validation' | 'accountant_review' | 'control_queue';
+  blocking: boolean;
+  indicators: {
+    supplier: ConfidenceIndicator & { matched: boolean; party_id: number | null; party_name: string | null };
+    amount: ConfidenceIndicator;
+    vat: ConfidenceIndicator;
+    invoice_type: ConfidenceIndicator;
+    account: ConfidenceIndicator;
+  };
+};
 
 export type InvoiceReviewDetail = {
   invoice: InvoiceDetail;
   proposal: Proposal | null;
+  confidence: ConfidenceAssessment;
   options: Options;
   company_profile: { activity: string | null; sector: string | null };
   checks: {
@@ -405,7 +418,7 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
     router.post(`/companies/${companyId}/invoices/${invoiceId}/proposal/regenerate`, {}, {
       preserveScroll: true,
       onSuccess: () => {
-        toast.success('La régénération de la proposition comptable a démarré.');
+        toast.success('La génération de la proposition comptable a démarré.');
         onChanged?.();
         void loadDetails(false, false);
       },
@@ -513,7 +526,7 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
   const canEditInvoice = Boolean(detail?.can_manage && editableInvoiceStatuses.includes(detail.invoice.status));
   const canEditProposal = Boolean(detail?.can_manage && detail.proposal?.status === 'ready' && detail.invoice.status === 'proposal_ready');
   const canRegenerateProposal = Boolean(detail?.can_manage
-    && ['proposal_ready', 'proposal_rejected', 'accounting_analysis_failed'].includes(detail.invoice.status)
+    && ['ocr_completed', 'proposal_ready', 'proposal_rejected', 'accounting_analysis_failed'].includes(detail.invoice.status)
     && detail.proposal?.journal_entry_id == null);
   const invoiceNeedsSave = Boolean(detail && invoiceData && JSON.stringify(detail.invoice.ocr_data) !== JSON.stringify(invoiceData));
   const proposalNeedsSave = Boolean(detail?.proposal && proposalForm && JSON.stringify(detail.proposal) !== JSON.stringify(proposalForm));
@@ -541,8 +554,8 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
   const draftCreditTotal = proposalForm ? sumProposalAmounts(proposalForm.lines, 'credit') : null;
 
   return (
-    <section aria-labelledby="invoice-review-title" className="flex h-full min-h-[560px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm xl:min-h-0">
-      <header className="shrink-0 border-b border-slate-200 bg-white px-4 py-4 sm:px-5">
+    <section aria-labelledby="invoice-review-title" className="min-w-0 space-y-4">
+      <header className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm sm:px-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-teal-700">Espace de revue · facture #{invoiceId}</p>
@@ -557,36 +570,36 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
 
       {loading || !detail || !invoiceData ? (
         <div className="flex min-h-64 flex-1 items-center justify-center gap-2 text-sm text-slate-500" role="status"><LoaderCircle className="animate-spin" size={18} /> Chargement des informations…</div>
+      ) : extractionInProgress ? (
+        <AnalysisWorkingState filename={detail.invoice.original_filename} status={detail.invoice.status} />
       ) : (
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-slate-50/70 p-3 sm:p-4">
+        <div className="min-w-0 space-y-4">
           <section aria-label="Confiance IA" className="rounded-xl border border-teal-100 bg-gradient-to-br from-teal-50/80 to-white p-4">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900"><Sparkles size={16} className="text-teal-700" /> Confiance IA</h3>
-                <p className="mt-0.5 text-[11px] text-slate-500">Indicateurs disponibles pour cette facture, sans score estimé côté interface.</p>
+                <p className="mt-0.5 text-[11px] text-slate-500">Scores calculés côté serveur à partir des montants, des tiers actifs et de l’historique comptable disponible.</p>
               </div>
-              {detail.proposal && <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-semibold text-slate-600">Proposition · {detail.proposal.model}</span>}
             </div>
             <div className="mt-4 grid gap-4 sm:grid-cols-[112px_minmax(0,1fr)]">
               <div className="flex flex-col items-center justify-center rounded-lg border border-white/80 bg-white/80 p-3 text-center">
-                <ConfidenceRing value={detail.proposal?.confidence ?? null} />
-                <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Moyenne des lignes comptables</p>
-                <p className="mt-0.5 text-[10px] text-slate-400">Scores réels enregistrés</p>
+                <ConfidenceRing value={detail.confidence.overall} />
+                <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Confiance globale calculée</p>
+                <p className="mt-0.5 text-[10px] text-slate-400">Priorité · {confidenceRouteLabel(detail.confidence.route)}</p>
               </div>
               <div className="grid gap-x-5 gap-y-3 sm:grid-cols-2">
-                <ConfidenceBar label="Fournisseur" value={null} />
-                <ConfidenceBar label="Montants" value={null} />
-                <ConfidenceBar label="TVA" value={null} />
-                <ConfidenceBar label="Type de facture" value={null} />
-                <ConfidenceBar label="Compte comptable" value={detail.proposal?.confidence ?? null} />
+                <ConfidenceBar label="Fournisseur / tiers" value={detail.confidence.indicators.supplier.score} />
+                <ConfidenceBar label="Montants" value={detail.confidence.indicators.amount.score} />
+                <ConfidenceBar label="TVA" value={detail.confidence.indicators.vat.score} />
+                <ConfidenceBar label="Type de facture" value={detail.confidence.indicators.invoice_type.score} />
+                <ConfidenceBar label="Compte comptable" value={detail.confidence.indicators.account.score} />
               </div>
             </div>
-            <p className="mt-3 text-[10px] leading-4 text-slate-500">Les modèles ne renvoient pas de scores calibrés distincts pour fournisseur, montants, TVA ou type : ces barres restent non disponibles. La confiance comptable est la moyenne des confiances réelles de lignes.</p>
-            <div className="mt-3 grid gap-2 sm:grid-cols-3">
-              <ModelIndicator label="Lecture OCR" value={detail.invoice.ocr_model || 'En attente'} complete={Boolean(detail.invoice.ocr_text || detail.invoice.ocr_model)} />
-              <ModelIndicator label="Extraction" value={detail.invoice.extraction_model || 'En attente'} complete={Boolean(detail.invoice.extraction_model)} />
-              <ModelIndicator label="Proposition" value={detail.proposal?.model || 'En attente'} complete={Boolean(detail.proposal)} />
-            </div>
+            {detail.confidence.blocking && <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-[11px] font-medium text-amber-900">Un contrôle impose une revue comptable avant validation.</p>}
+            <ul className="mt-3 space-y-1 text-[10px] leading-4 text-slate-600">
+              {Object.entries(detail.confidence.indicators).flatMap(([key, indicator]) => indicator.evidence.map((evidence, index) => <li key={`${key}-${index}`}><strong>{confidenceIndicatorLabel(key)} :</strong> {evidence}</li>))}
+            </ul>
+            <p className="mt-3 text-[10px] leading-4 text-slate-500">Le compte comptable pèse davantage dans le score global. Un contrôle bloquant impose une revue; aucune écriture n’est validée automatiquement.</p>
           </section>
 
           <section className="rounded-xl border border-teal-100 bg-gradient-to-br from-teal-50/90 to-white p-4">
@@ -644,20 +657,19 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
             {canEditInvoice ? (
               <form onSubmit={saveInvoiceData} className="mt-4 space-y-4">
                 <fieldset disabled={savingInvoice} className="space-y-4 disabled:opacity-70">
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
                     <TextField label="Fournisseur *" value={invoiceData.supplier_name} onChange={(value) => updateInvoiceField('supplier_name', value)} />
                     <TextField label="Matricule fiscal fournisseur" value={invoiceData.supplier_tax_identifier} onChange={(value) => updateInvoiceField('supplier_tax_identifier', value)} />
                     <TextField label="Numéro de facture *" value={invoiceData.invoice_number} onChange={(value) => updateInvoiceField('invoice_number', value)} />
                     <TextField label="Date de facture *" type="date" value={invoiceData.invoice_date} onChange={(value) => updateInvoiceField('invoice_date', value)} />
                     <TextField label="Date d’échéance" type="date" value={invoiceData.due_date} onChange={(value) => updateInvoiceField('due_date', value)} />
-                    <TextField label="Mode de paiement" value={invoiceData.payment_method} onChange={(value) => updateInvoiceField('payment_method', value)} />
                   </div>
                   <TextAreaField label="Description / nature de la facture *" value={invoiceData.description} onChange={(value) => updateInvoiceField('description', value)} />
 
                   <FieldGroup title="Montants et taxes (valeurs imprimées)">
-                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="grid gap-3 sm:grid-cols-2">
                       <DecimalField label="Total HT" value={invoiceData.subtotal} onChange={(value) => updateInvoiceField('subtotal', value)} />
-                      <DecimalField label="Taux TVA (%)" value={invoiceData.vat_rate} onChange={(value) => updateInvoiceField('vat_rate', value)} />
+                      <VatRateField label="Taux TVA (%)" value={invoiceData.vat_rate} rates={detail.options.vat_rates} onChange={(value) => updateInvoiceField('vat_rate', value)} />
                       <DecimalField label="Montant TVA" value={invoiceData.vat_amount} onChange={(value) => updateInvoiceField('vat_amount', value)} />
                       <DecimalField label="Taux FODEC (%)" value={invoiceData.fodec_rate} onChange={(value) => updateInvoiceField('fodec_rate', value)} />
                       <DecimalField label="Montant FODEC" value={invoiceData.fodec_amount} onChange={(value) => updateInvoiceField('fodec_amount', value)} />
@@ -665,7 +677,8 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
                       <DecimalField label="Droit de timbre" value={invoiceData.stamp_amount} onChange={(value) => updateInvoiceField('stamp_amount', value)} />
                       <DecimalField label="Total TTC brut" value={invoiceData.total_amount} onChange={(value) => updateInvoiceField('total_amount', value)} />
                       <DecimalField label="Retenue à la source" value={invoiceData.withholding_amount} onChange={(value) => updateInvoiceField('withholding_amount', value)} />
-                      <TextField label="Devise ISO *" value={invoiceData.currency} onChange={(value) => updateInvoiceField('currency', value?.toUpperCase() ?? null)} placeholder="TND" maxLength={3} />
+                      <DecimalField label="Net à payer imprimé" value={invoiceData.net_to_pay_amount} onChange={(value) => updateInvoiceField('net_to_pay_amount', value)} />
+                      <TextField label="Devise" value={invoiceData.currency} onChange={(value) => updateInvoiceField('currency', value?.toUpperCase() ?? null)} placeholder="TND / EUR" maxLength={3} />
                     </div>
                     <button type="button" onClick={recalculateInvoiceTotals} disabled={savingInvoice} className="inline-flex items-center gap-2 rounded-md border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-900 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-60">
                       <Calculator size={14} /> ↻ Recalculer à partir de ces montants
@@ -693,7 +706,7 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
                         <div className="grid gap-3 sm:grid-cols-2">
                           <DecimalField label="Remise totale (référence)" value={invoiceData.total_discount_amount} onChange={(value) => updateInvoiceField('total_discount_amount', value)} />
                           <DecimalField label="Taux de retenue (%)" value={invoiceData.withholding_rate} onChange={(value) => updateInvoiceField('withholding_rate', value)} />
-                          <DecimalField label="Net à payer imprimé" value={invoiceData.net_to_pay_amount} onChange={(value) => updateInvoiceField('net_to_pay_amount', value)} />
+                          <TextField label="Mode de paiement" value={invoiceData.payment_method} onChange={(value) => updateInvoiceField('payment_method', value)} />
                           <TextField label="Conditions de paiement" value={invoiceData.payment_terms} onChange={(value) => updateInvoiceField('payment_terms', value)} />
                           <TextField label="Référence de commande" value={invoiceData.purchase_order_reference} onChange={(value) => updateInvoiceField('purchase_order_reference', value)} />
                           <TextField label="Banque" value={invoiceData.bank_name} onChange={(value) => updateInvoiceField('bank_name', value)} />
@@ -703,40 +716,38 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
                     </div>
                   </details>
 
-                  <FieldGroup title={`Lignes de facture (${invoiceData.lines.length})`}>
-                    <div className="overflow-x-auto rounded-lg border border-slate-200">
-                      <table className="min-w-[700px] w-full text-left text-xs">
-                        <thead className="bg-slate-50 text-slate-600"><tr><th className="px-3 py-2">Description</th><th className="px-3 py-2">Quantité</th><th className="px-3 py-2">Prix unitaire HT</th><th className="px-3 py-2">Remise</th><th className="px-3 py-2">TVA</th><th className="px-3 py-2">Total TTC</th><th className="px-2 py-2"><span className="sr-only">Supprimer</span></th></tr></thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {invoiceData.lines.map((line, index) => (
-                            <tr key={index}>
-                              <td className="min-w-44 px-2 py-2"><input aria-label={`Description de la ligne ${index + 1}`} className="w-full min-w-40 rounded border border-slate-300 px-2 py-1.5" value={line.description ?? ''} onChange={(event) => updateInvoiceLine(index, 'description', event.target.value || null)} /></td>
-                              <td className="px-2 py-2"><input aria-label={`Quantité de la ligne ${index + 1}`} inputMode="decimal" className="w-20 rounded border border-slate-300 px-2 py-1.5" value={line.quantity ?? ''} onChange={(event) => updateInvoiceLine(index, 'quantity', event.target.value || null)} /></td>
-                              <td className="px-2 py-2"><input aria-label={`Prix unitaire HT de la ligne ${index + 1}`} inputMode="decimal" className="w-24 rounded border border-slate-300 px-2 py-1.5" value={line.unit_price ?? ''} onChange={(event) => updateInvoiceLine(index, 'unit_price', event.target.value || null)} /></td>
-                              <td className="px-2 py-2"><input aria-label={`Remise de la ligne ${index + 1}`} inputMode="decimal" className="w-20 rounded border border-slate-300 px-2 py-1.5" value={line.discount_amount ?? ''} onChange={(event) => updateInvoiceLine(index, 'discount_amount', event.target.value || null)} /></td>
-                              <td className="px-2 py-2"><input aria-label={`Taux TVA de la ligne ${index + 1}`} inputMode="decimal" className="w-20 rounded border border-slate-300 px-2 py-1.5" value={line.vat_rate ?? ''} onChange={(event) => updateInvoiceLine(index, 'vat_rate', event.target.value || null)} /></td>
-                              <td className="px-2 py-2"><input aria-label={`Total TTC de la ligne ${index + 1}`} inputMode="decimal" className="w-24 rounded border border-slate-300 px-2 py-1.5" value={line.total_amount ?? ''} onChange={(event) => updateInvoiceLine(index, 'total_amount', event.target.value || null)} /></td>
-                              <td className="px-2 py-2"><button type="button" aria-label={`Supprimer la ligne ${index + 1}`} onClick={() => setInvoiceData((current) => current ? { ...current, lines: current.lines.filter((_, lineIndex) => lineIndex !== index) } : current)} className="rounded p-1 text-red-600 hover:bg-red-50"><Trash2 size={14} /></button></td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                    <button type="button" onClick={() => setInvoiceData((current) => current ? { ...current, lines: [...current.lines, emptyLine()] } : current)} className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:border-teal-400 hover:text-teal-800"><Plus size={14} /> Ajouter une ligne de facture</button>
-                    {invoiceData.lines.map((line, index) => (
-                      <details key={`more-${index}`} className="rounded-md border border-slate-200 px-3 py-2">
-                        <summary className="cursor-pointer text-xs font-semibold text-slate-700">Détails de ligne {index + 1}</summary>
-                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                          <TextField label="Référence" value={line.reference} onChange={(value) => updateInvoiceLine(index, 'reference', value)} />
-                          <DecimalField label="Total HT de ligne" value={line.subtotal} onChange={(value) => updateInvoiceLine(index, 'subtotal', value)} />
-                          <DecimalField label="Montant TVA" value={line.vat_amount} onChange={(value) => updateInvoiceLine(index, 'vat_amount', value)} />
-                          <DecimalField label="Taux FODEC (%)" value={line.fodec_rate} onChange={(value) => updateInvoiceLine(index, 'fodec_rate', value)} />
-                          <DecimalField label="Montant FODEC" value={line.fodec_amount} onChange={(value) => updateInvoiceLine(index, 'fodec_amount', value)} />
-                          <DecimalField label="Autres taxes" value={line.other_tax_amount} onChange={(value) => updateInvoiceLine(index, 'other_tax_amount', value)} />
+                  <details className="rounded-lg border border-slate-200 px-3 py-2">
+                    <summary className="cursor-pointer text-xs font-semibold text-slate-700">Lignes détaillées ({invoiceData.lines.length})</summary>
+                    <div className="mt-3 space-y-3">
+                      {invoiceData.lines.map((line, index) => (
+                        <div key={index} className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+                          <div className="flex items-start gap-2">
+                            <div className="min-w-0 flex-1"><TextAreaField label={`Désignation · ligne ${index + 1}`} value={line.description} onChange={(value) => updateInvoiceLine(index, 'description', value)} /></div>
+                            <button type="button" aria-label={`Supprimer la ligne ${index + 1}`} onClick={() => setInvoiceData((current) => current ? { ...current, lines: current.lines.filter((_, lineIndex) => lineIndex !== index) } : current)} className="mt-6 rounded p-1.5 text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
+                          </div>
+                          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                            <DecimalField label="Quantité" value={line.quantity} onChange={(value) => updateInvoiceLine(index, 'quantity', value)} />
+                            <DecimalField label="Prix unitaire HT" value={line.unit_price} onChange={(value) => updateInvoiceLine(index, 'unit_price', value)} />
+                            <DecimalField label="Total HT de ligne" value={line.subtotal} onChange={(value) => updateInvoiceLine(index, 'subtotal', value)} />
+                            <VatRateField label="Taux TVA (%)" value={line.vat_rate} rates={detail.options.vat_rates} onChange={(value) => updateInvoiceLine(index, 'vat_rate', value)} />
+                            <DecimalField label="Montant TVA" value={line.vat_amount} onChange={(value) => updateInvoiceLine(index, 'vat_amount', value)} />
+                            <DecimalField label="Total TTC de ligne" value={line.total_amount} onChange={(value) => updateInvoiceLine(index, 'total_amount', value)} />
+                          </div>
+                          <details className="mt-3 rounded border border-slate-200 bg-white px-3 py-2">
+                            <summary className="cursor-pointer text-[11px] font-semibold text-slate-600">Autres détails de ligne</summary>
+                            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                              <TextField label="Référence" value={line.reference} onChange={(value) => updateInvoiceLine(index, 'reference', value)} />
+                              <DecimalField label="Remise" value={line.discount_amount} onChange={(value) => updateInvoiceLine(index, 'discount_amount', value)} />
+                              <DecimalField label="Taux FODEC (%)" value={line.fodec_rate} onChange={(value) => updateInvoiceLine(index, 'fodec_rate', value)} />
+                              <DecimalField label="Montant FODEC" value={line.fodec_amount} onChange={(value) => updateInvoiceLine(index, 'fodec_amount', value)} />
+                              <DecimalField label="Autres taxes" value={line.other_tax_amount} onChange={(value) => updateInvoiceLine(index, 'other_tax_amount', value)} />
+                            </div>
+                          </details>
                         </div>
-                      </details>
-                    ))}
-                  </FieldGroup>
+                      ))}
+                      <button type="button" onClick={() => setInvoiceData((current) => current ? { ...current, lines: [...current.lines, emptyLine()] } : current)} className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:border-teal-400 hover:text-teal-800"><Plus size={14} /> Ajouter une ligne</button>
+                    </div>
+                  </details>
                 </fieldset>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   {invoiceNeedsSave && <span className="text-[11px] font-medium text-amber-800">Modifications non enregistrées</span>}
@@ -745,7 +756,7 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
                     {savingInvoice ? 'Enregistrement…' : 'Enregistrer les données'}
                   </button>
                 </div>
-                <p className="text-[11px] leading-5 text-slate-500">Quand les champs obligatoires sont complets, l’analyse comptable redémarre automatiquement. Les versions précédentes restent conservées pour audit.</p>
+                <p className="text-[11px] leading-5 text-slate-500">Le TTC et une désignation permettent de préparer le brouillon. Les autres champs manquants restent signalés et doivent être vérifiés avant validation. Les versions précédentes sont conservées pour audit.</p>
               </form>
             ) : (
               <InvoiceDataSummary data={invoiceData} />
@@ -785,7 +796,7 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {detail.proposal && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-900">Brouillon · {detail.proposal.journal_code || 'journal à vérifier'}</span>}
-                {canRegenerateProposal && <button type="button" onClick={regenerateProposal} disabled={regeneratingProposal || invoiceNeedsSave || proposalNeedsSave} className="inline-flex items-center gap-1.5 rounded-md border border-teal-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50">{regeneratingProposal ? <LoaderCircle className="animate-spin" size={13} /> : <Sparkles size={13} />}{regeneratingProposal ? 'Régénération…' : 'Régénérer la proposition IA'}</button>}
+                {canRegenerateProposal && <button type="button" onClick={regenerateProposal} disabled={regeneratingProposal || invoiceNeedsSave || proposalNeedsSave} className="inline-flex items-center gap-1.5 rounded-md border border-teal-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50">{regeneratingProposal ? <LoaderCircle className="animate-spin" size={13} /> : <Sparkles size={13} />}{regeneratingProposal ? 'Génération…' : detail.invoice.status === 'ocr_completed' ? 'Générer la proposition IA' : 'Régénérer la proposition IA'}</button>}
               </div>
             </div>
             {detail.proposal ? (
@@ -794,7 +805,7 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <p className="text-xs font-semibold text-slate-900">{detail.proposal.entry_description || 'Écriture proposée'}</p>
-                      <p className="mt-1 text-[11px] text-slate-500">{detail.proposal.journal_label || 'Journal non disponible'} · modèle {detail.proposal.model}</p>
+                      <p className="mt-1 text-[11px] text-slate-500">{detail.proposal.journal_label || 'Journal non disponible'}</p>
                     </div>
                     <ProposalStatusPill status={detail.proposal.status} />
                   </div>
@@ -813,35 +824,36 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
                       </label>
                       <TextField label="Libellé d’écriture" value={proposalForm.entry_description} onChange={(value) => updateProposalField('entry_description', value ?? '')} />
                     </div>
-                    <div className="overflow-x-auto rounded-lg border border-slate-200">
-                      <table className="min-w-[850px] w-full text-left text-xs">
-                        <thead className="bg-slate-50 text-slate-600"><tr><th className="px-3 py-2">Compte</th><th className="px-3 py-2">Tiers</th><th className="px-3 py-2">Analytique</th><th className="px-3 py-2">Libellé</th><th className="px-3 py-2 text-right">Débit</th><th className="px-3 py-2 text-right">Crédit</th><th className="px-3 py-2 text-right">Confiance</th><th className="px-2 py-2"><span className="sr-only">Supprimer</span></th></tr></thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {proposalForm.lines.map((line, index) => (
-                            <tr key={line.id ?? `line-${index}`}>
-                              <td className="px-2 py-2"><select aria-label={`Compte comptable de la ligne ${index + 1}`} className="w-40 rounded border border-slate-300 px-2 py-1.5" value={line.chart_account_id || ''} onChange={(event) => updateProposalLine(index, 'chart_account_id', Number(event.target.value))}><option value="">Choisir un compte</option>{detail.options.chart_accounts.map((account) => <option key={account.id} value={account.id}>{account.code} — {account.label}</option>)}</select></td>
-                              <td className="px-2 py-2"><select aria-label={`Tiers de la ligne ${index + 1}`} className="w-36 rounded border border-slate-300 px-2 py-1.5" value={line.third_party_id ?? ''} onChange={(event) => updateProposalLine(index, 'third_party_id', event.target.value ? Number(event.target.value) : null)}><option value="">Aucun tiers</option>{detail.options.third_parties.map((party) => <option key={party.id} value={party.id}>{party.code} — {party.name}</option>)}</select></td>
-                              <td className="px-2 py-2"><select aria-label={`Axe analytique de la ligne ${index + 1}`} className="w-36 rounded border border-slate-300 px-2 py-1.5" value={line.analytical_account_id ?? ''} onChange={(event) => updateProposalLine(index, 'analytical_account_id', event.target.value ? Number(event.target.value) : null)}><option value="">Aucun axe</option>{detail.options.analytical_accounts.map((item) => <option key={item.id} value={item.id}>{item.code} — {item.label}</option>)}</select></td>
-                              <td className="px-2 py-2"><input aria-label={`Libellé de la ligne ${index + 1}`} className="w-40 rounded border border-slate-300 px-2 py-1.5" value={line.description ?? ''} onChange={(event) => updateProposalLine(index, 'description', event.target.value || null)} /></td>
-                              <td className="px-2 py-2"><input aria-label={`Débit de la ligne ${index + 1}`} inputMode="decimal" className="w-24 rounded border border-slate-300 px-2 py-1.5 text-right tabular-nums" value={line.debit} onChange={(event) => updateProposalLine(index, 'debit', event.target.value)} /></td>
-                              <td className="px-2 py-2"><input aria-label={`Crédit de la ligne ${index + 1}`} inputMode="decimal" className="w-24 rounded border border-slate-300 px-2 py-1.5 text-right tabular-nums" value={line.credit} onChange={(event) => updateProposalLine(index, 'credit', event.target.value)} /></td>
-                              <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-slate-500">{line.confidence === null ? '—' : `${(Number(line.confidence) * 100).toFixed(0)}%`}</td>
-                              <td className="px-2 py-2"><button type="button" aria-label={`Supprimer la ligne ${index + 1}`} onClick={() => updateProposalField('lines', proposalForm.lines.filter((_, lineIndex) => lineIndex !== index))} className="rounded p-1.5 text-red-600 hover:bg-red-50"><Trash2 size={14} /></button></td>
-                            </tr>
-                          ))}
-                        </tbody>
-                        <tfoot className="border-t border-slate-200 bg-slate-50 font-semibold text-slate-800">
-                          <tr>
-                            <td colSpan={4} className="px-3 py-2">Totaux de l’écriture{proposalNeedsSave ? ' · non enregistrés' : ''}</td>
-                            <td className="px-3 py-2 text-right tabular-nums">{formatMilliCurrency(draftDebitTotal, invoiceData.currency)}</td>
-                            <td className="px-3 py-2 text-right tabular-nums">{formatMilliCurrency(draftCreditTotal, invoiceData.currency)}</td>
-                            <td colSpan={2} />
-                          </tr>
-                        </tfoot>
-                      </table>
+                    <div className="space-y-3">
+                      {proposalForm.lines.map((line, index) => (
+                        <div key={line.id ?? `line-${index}`} className="min-w-0 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <p className="text-xs font-semibold text-slate-700">Ligne {index + 1}</p>
+                            <button type="button" aria-label={`Supprimer la ligne ${index + 1}`} onClick={() => updateProposalField('lines', proposalForm.lines.filter((_, lineIndex) => lineIndex !== index))} className="rounded p-1.5 text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
+                          </div>
+                          <div className="grid min-w-0 gap-3 sm:grid-cols-2">
+                            <label className="block min-w-0 text-xs font-semibold text-slate-700">Compte comptable
+                              <select aria-label={`Compte comptable de la ligne ${index + 1}`} className={selectClass} value={line.chart_account_id || ''} onChange={(event) => updateProposalLine(index, 'chart_account_id', Number(event.target.value))}><option value="">Choisir un compte</option>{detail.options.chart_accounts.map((account) => <option key={account.id} value={account.id}>{account.code} — {account.label}</option>)}</select>
+                            </label>
+                            <label className="block min-w-0 text-xs font-semibold text-slate-700">Tiers
+                              <select aria-label={`Tiers de la ligne ${index + 1}`} className={selectClass} value={line.third_party_id ?? ''} onChange={(event) => updateProposalLine(index, 'third_party_id', event.target.value ? Number(event.target.value) : null)}><option value="">Aucun tiers</option>{detail.options.third_parties.map((party) => <option key={party.id} value={party.id}>{party.code} — {party.name}</option>)}</select>
+                            </label>
+                            <label className="block min-w-0 text-xs font-semibold text-slate-700">Axe analytique
+                              <select aria-label={`Axe analytique de la ligne ${index + 1}`} className={selectClass} value={line.analytical_account_id ?? ''} onChange={(event) => updateProposalLine(index, 'analytical_account_id', event.target.value ? Number(event.target.value) : null)}><option value="">Aucun axe</option>{detail.options.analytical_accounts.map((item) => <option key={item.id} value={item.id}>{item.code} — {item.label}</option>)}</select>
+                            </label>
+                            <TextField label="Libellé" value={line.description} onChange={(value) => updateProposalLine(index, 'description', value)} />
+                            <DecimalField label="Débit" value={line.debit} onChange={(value) => updateProposalLine(index, 'debit', value ?? '0.000')} />
+                            <DecimalField label="Crédit" value={line.credit} onChange={(value) => updateProposalLine(index, 'credit', value ?? '0.000')} />
+                          </div>
+                        </div>
+                      ))}
+                      <div className="flex flex-wrap justify-between gap-2 rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-800">
+                        <span>Totaux de l’écriture{proposalNeedsSave ? ' · non enregistrés' : ''}</span>
+                        <span>Débit {formatMilliCurrency(draftDebitTotal, invoiceData.currency)} · Crédit {formatMilliCurrency(draftCreditTotal, invoiceData.currency)}</span>
+                      </div>
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <button type="button" onClick={() => updateProposalField('lines', [...proposalForm.lines, { chart_account_id: detail.options.chart_accounts[0]?.id ?? 0, third_party_id: null, analytical_account_id: null, description: '', debit: '0.000', credit: '0.000', confidence: null }])} className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:border-teal-400"><Plus size={14} /> Ajouter une ligne</button>
+                      <button type="button" onClick={() => updateProposalField('lines', [...proposalForm.lines, { chart_account_id: detail.options.chart_accounts[0]?.id ?? 0, third_party_id: null, analytical_account_id: null, description: '', debit: '0.000', credit: '0.000' }])} className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:border-teal-400"><Plus size={14} /> Ajouter une ligne</button>
                       {proposalNeedsSave && <span className="text-[11px] font-medium text-amber-800">Modifications non enregistrées</span>}
                       <button type="submit" disabled={savingProposal || !proposalForm.invoice_type || detail.options.journals.length === 0 || detail.options.chart_accounts.length === 0 || !proposalNeedsSave} className="ml-auto inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60">{savingProposal ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}{savingProposal ? 'Enregistrement…' : 'Enregistrer la proposition'}</button>
                     </div>
@@ -877,7 +889,7 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
               <CheckCard label="TTC brut, retenue et net à payer" check={detail.checks.totals} />
               <CheckCard label="Équilibre débit / crédit" check={detail.checks.balance} />
               <CheckCard label="Comptes et journaux actifs de la société" check={detail.checks.accounts} />
-              <CheckCard label="Doublon de fichier" check={detail.checks.duplicate} />
+              <CheckCard label="Doublon facture / fichier" check={detail.checks.duplicate} />
               <CheckCard label="Exercice fiscal" check={detail.checks.fiscal_year} />
               <CheckCard label="Devise" check={detail.checks.currency} />
             </div>
@@ -890,14 +902,14 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
             </summary>
             <div className="mt-3">
               {detail.invoice.ocr_display_text
-                ? <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-5 text-slate-800">{detail.invoice.ocr_display_text}</pre>
+                ? <pre className="whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-5 text-slate-800">{detail.invoice.ocr_display_text}</pre>
                 : <p className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">Aucun texte OCR n’est disponible pour cette étape.{detail.invoice.ocr_error_message ? ` ${detail.invoice.ocr_error_message}` : ''}</p>}
             </div>
           </details>
         </div>
       )}
 
-      <footer className="shrink-0 border-t border-slate-200 bg-white px-3 py-3 sm:px-4">
+      {!extractionInProgress && <footer className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="mb-2 flex items-start justify-between gap-3">
           <div>
             <h3 className="text-sm font-semibold text-slate-900">5 Décision du comptable</h3>
@@ -920,19 +932,45 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
         ) : (
           <p className="text-[10px] leading-4 text-slate-500">Aucune décision n’est disponible à cette étape ou pour ces permissions. Une écriture définitive n’est créée qu’après validation humaine.</p>
         )}
-      </footer>
+      </footer>}
     </section>
   );
 }
 
-function ModelIndicator({ label, value, complete }: { label: string; value: string; complete: boolean }) {
+function AnalysisWorkingState({ filename, status }: { filename: string; status: string }) {
+  const steps = ['Lecture du document', 'Extraction des données', 'Proposition comptable'];
+  const activeStep = status === 'ocr_queued' || status === 'ocr_processing' ? 0 : status === 'data_extraction' ? 1 : 2;
+  const stageLabel = status === 'ocr_queued' ? 'Mise en file de traitement'
+    : status === 'ocr_processing' ? 'Lecture du document'
+      : status === 'data_extraction' ? 'Extraction des données'
+        : 'Analyse comptable';
+  const title = status === 'accounting_analysis' ? 'Votre proposition se prépare' : 'Votre facture est en cours de traitement';
+
   return (
-    <div className="min-w-0 rounded-lg border border-white/80 bg-white/85 p-2.5">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-      <p className={`mt-1 flex items-center gap-1.5 truncate text-[11px] font-medium ${complete ? 'text-slate-800' : 'text-slate-400'}`} title={value}>
-        {complete ? <CheckCircle2 size={12} className="shrink-0 text-emerald-600" /> : <Circle size={12} className="shrink-0" />}{value}
-      </p>
-    </div>
+    <section aria-label="Analyse comptable en cours" role="status" aria-live="polite" className="grid min-h-[65vh] place-items-center overflow-hidden rounded-2xl border border-teal-100 bg-gradient-to-br from-teal-50 via-white to-cyan-50 px-6 py-12 text-center shadow-sm">
+      <div className="max-w-lg">
+        <div className="relative mx-auto grid h-28 w-28 place-items-center rounded-full bg-white shadow-lg shadow-teal-900/10">
+          <span className="absolute inset-1 rounded-full border-2 border-teal-100" />
+          <span className="absolute inset-1 rounded-full border-2 border-transparent border-t-teal-600 animate-spin" />
+          <span className="absolute inset-4 rounded-full bg-teal-50 animate-pulse" />
+          <Sparkles size={34} className="relative text-teal-700 animate-pulse" />
+          <span className="absolute -right-1 -top-1 h-4 w-4 rounded-full bg-cyan-400 ring-4 ring-white animate-ping" />
+        </div>
+        <p className="mt-8 text-xs font-semibold uppercase tracking-[0.16em] text-teal-700">{stageLabel}</p>
+        <h3 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{title}</h3>
+        <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-600">Nous avançons dans les étapes de lecture et d’analyse. Cette page se mettra à jour dès que les résultats seront prêts.</p>
+        <p className="mx-auto mt-3 max-w-md truncate rounded-lg bg-white/80 px-3 py-2 text-xs font-medium text-slate-500" title={filename}>{filename}</p>
+        <div className="mx-auto mt-8 grid max-w-md gap-2 text-left sm:grid-cols-3">
+          {steps.map((step, index) => (
+            <div key={step} className={`rounded-lg border border-teal-100 bg-white/80 p-3 ${index === activeStep ? 'animate-pulse' : ''}`}>
+              <span className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${index <= activeStep ? 'bg-teal-100 text-teal-800' : 'bg-slate-100 text-slate-500'}`}>{index < activeStep ? <CheckCircle2 size={14} /> : index + 1}</span>
+              <p className="mt-2 text-[11px] font-medium leading-4 text-slate-700">{step}</p>
+            </div>
+          ))}
+        </div>
+        <div className="mt-7 flex items-center justify-center gap-2 text-xs font-medium text-teal-800"><LoaderCircle size={15} className="animate-spin" /> Traitement en cours</div>
+      </div>
+    </section>
   );
 }
 
@@ -940,10 +978,27 @@ function ConfidenceRing({ value }: { value: number | null }) {
   const progress = value === null ? 0 : Math.max(0, Math.min(1, value)) * 360;
   const color = confidenceColor(value);
   return (
-    <div className="grid h-[76px] w-[76px] place-items-center rounded-full" style={{ background: `conic-gradient(${color} ${progress}deg, #e2e8f0 ${progress}deg)` }} aria-label={value === null ? 'Moyenne des confidences comptables non disponible' : `Moyenne des confidences de lignes ${Math.round(value * 100)} pour cent`}>
+    <div className="grid h-[76px] w-[76px] place-items-center rounded-full" style={{ background: `conic-gradient(${color} ${progress}deg, #e2e8f0 ${progress}deg)` }} aria-label={value === null ? 'Confiance globale non disponible' : `Confiance globale calculée ${Math.round(value * 100)} pour cent`}>
       <div className="grid h-[60px] w-[60px] place-items-center rounded-full bg-white text-lg font-bold tabular-nums text-slate-900">{value === null ? 'N/D' : `${Math.round(value * 100)}%`}</div>
     </div>
   );
+}
+
+function confidenceRouteLabel(route: ConfidenceAssessment['route']): string {
+  return route === 'quick_validation' ? 'Validation rapide'
+    : route === 'accountant_review' ? 'Revue comptable'
+      : 'Contrôle renforcé';
+}
+
+function confidenceIndicatorLabel(key: string): string {
+  const labels: Record<string, string> = {
+    supplier: 'Fournisseur',
+    amount: 'Montants',
+    vat: 'TVA',
+    invoice_type: 'Type de facture',
+    account: 'Compte comptable',
+  };
+  return labels[key] ?? key;
 }
 
 function ConfidenceBar({ label, value }: { label: string; value: number | null }) {
@@ -1120,6 +1175,20 @@ function DecimalField({ label, value, onChange }: { label: string; value: string
   return <TextField label={label} value={value} onChange={onChange} placeholder="—" inputMode="decimal" />;
 }
 
+function VatRateField({ label, value, rates, onChange }: { label: string; value: string | null; rates: string[]; onChange: (value: string | null) => void }) {
+  if (rates.length === 0) return <DecimalField label={label} value={value} onChange={onChange} />;
+  const availableRates = value && !rates.includes(value) ? [...rates, value] : rates;
+  return (
+    <label className="block text-xs font-medium text-slate-600">
+      {label}
+      <select className={selectClass} value={value ?? ''} onChange={(event) => onChange(event.target.value || null)}>
+        <option value="">Non renseigné</option>
+        {availableRates.map((rate) => <option key={rate} value={rate}>{rate}%{!rates.includes(rate) ? ' · taux extrait non configuré' : ''}</option>)}
+      </select>
+    </label>
+  );
+}
+
 function TextAreaField({ label, value, onChange }: { label: string; value: string | null; onChange: (value: string | null) => void }) {
   return <label className="mt-3 block text-[11px] font-semibold text-slate-700">{label}<textarea className={`${inputClass} min-h-20`} value={value ?? ''} onChange={(event) => onChange(event.target.value === '' ? null : event.target.value)} /></label>;
 }
@@ -1166,28 +1235,25 @@ function AmountCard({ label, value, currency, emphasis = false }: { label: strin
 
 function ProposalReadOnly({ proposal, currency }: { proposal: Proposal; currency: string | null }) {
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-200">
-      <table className="min-w-[680px] w-full text-left text-[11px]">
-        <thead className="bg-slate-50 text-slate-600"><tr><th className="px-3 py-2">Compte</th><th className="px-3 py-2">Tiers</th><th className="px-3 py-2">Analytique</th><th className="px-3 py-2">Libellé</th><th className="px-3 py-2 text-right">Débit</th><th className="px-3 py-2 text-right">Crédit</th></tr></thead>
-        <tbody className="divide-y divide-slate-100">
-          {proposal.lines.map((line, index) => <tr key={line.id ?? index}>
-            <td className="px-3 py-2">{line.chart_account_code || '—'} · {line.chart_account_label || 'Compte'}</td>
-            <td className="px-3 py-2">{line.third_party_code ? `${line.third_party_code} · ${line.third_party_name}` : '—'}</td>
-            <td className="px-3 py-2">{line.analytical_account_code ? `${line.analytical_account_code} · ${line.analytical_account_label}` : '—'}</td>
-            <td className="px-3 py-2">{line.description || '—'}</td>
-            <td className="px-3 py-2 text-right tabular-nums">{line.debit}</td>
-            <td className="px-3 py-2 text-right tabular-nums">{line.credit}</td>
-          </tr>)}
-        </tbody>
-        <tfoot className="border-t border-slate-200 bg-slate-50 font-semibold text-slate-800">
-          <tr>
-            <td colSpan={4} className="px-3 py-2">Totaux</td>
-            <td className="px-3 py-2 text-right tabular-nums">{formatMilliCurrency(sumProposalAmounts(proposal.lines, 'debit'), currency)}</td>
-            <td className="px-3 py-2 text-right tabular-nums">{formatMilliCurrency(sumProposalAmounts(proposal.lines, 'credit'), currency)}</td>
-          </tr>
-        </tfoot>
-      </table>
-      <p className="border-t border-slate-100 px-3 py-2 text-[10px] text-slate-500">Confiance moyenne des lignes comptables : {proposal.confidence === null ? 'non disponible' : `${Math.round(proposal.confidence * 100)}%`}</p>
+    <div className="space-y-2">
+      {proposal.lines.map((line, index) => (
+        <article key={line.id ?? index} className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
+          <p className="break-words text-xs font-semibold text-slate-900">{line.chart_account_code || '—'} · {line.chart_account_label || 'Compte'}</p>
+          <p className="mt-1 break-words text-[11px] leading-4 text-slate-600">{line.description || 'Sans libellé'}</p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <p className="min-w-0 break-words text-[10px] text-slate-500">Tiers · {line.third_party_code ? `${line.third_party_code} · ${line.third_party_name}` : '—'}</p>
+            <p className="min-w-0 break-words text-[10px] text-slate-500">Analytique · {line.analytical_account_code ? `${line.analytical_account_code} · ${line.analytical_account_label}` : '—'}</p>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+            <p className="rounded bg-slate-50 p-2 text-slate-700">Débit <strong className="float-right tabular-nums">{formatMilliCurrency(parseMilliAmount(line.debit), currency)}</strong></p>
+            <p className="rounded bg-slate-50 p-2 text-slate-700">Crédit <strong className="float-right tabular-nums">{formatMilliCurrency(parseMilliAmount(line.credit), currency)}</strong></p>
+          </div>
+        </article>
+      ))}
+      <div className="grid gap-2 rounded-lg bg-slate-100 p-3 text-xs font-semibold text-slate-800 sm:grid-cols-2">
+        <p>Total débit · {formatMilliCurrency(sumProposalAmounts(proposal.lines, 'debit'), currency)}</p>
+        <p>Total crédit · {formatMilliCurrency(sumProposalAmounts(proposal.lines, 'credit'), currency)}</p>
+      </div>
     </div>
   );
 }
@@ -1205,6 +1271,9 @@ function warningLabel(warning: string): string {
     missing_total_amount: 'Total à payer manquant ou illisible.',
     missing_invoice_description: 'Description ou lignes de facture manquantes.',
     invoice_total_mismatch: 'La somme HT + taxes + timbre ne correspond pas au TTC brut imprimé (hors retenue).',
+    invoice_lines_subtotal_mismatch: 'La somme des montants HT des lignes diffère du sous-total global. Vérifiez les montants extraits.',
+    invoice_lines_vat_mismatch: 'La somme de la TVA des lignes diffère de la TVA globale. Vérifiez les montants extraits.',
+    invoice_line_vat_rate_mismatch: 'Au moins une ligne de TVA ne correspond pas à son taux déclaré.',
     invoice_vat_mismatch: 'Le montant de TVA ne correspond pas au taux et à la base déclarés.',
     invoice_net_to_pay_mismatch: 'Le net à payer ne correspond pas au TTC diminué de la retenue.',
     invoice_totals_unverified: 'Le contrôle des totaux n’est pas conclusif : certains montants sont absents.',

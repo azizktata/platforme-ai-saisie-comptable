@@ -14,6 +14,28 @@ class InvoiceTotalsConsistencyChecker
     ];
 
     /**
+     * A missing withholding is conclusive when the printed net payable equals gross TTC,
+     * because that establishes that no withholding was deducted.
+     *
+     * @param array<string, mixed> $invoiceData
+     */
+    public function canVerifyNetToPay(array $invoiceData): bool
+    {
+        if (! is_string($invoiceData['total_amount'] ?? null)
+            || ! $this->isDecimal($invoiceData['total_amount'])
+            || ! is_string($invoiceData['net_to_pay_amount'] ?? null)
+            || ! $this->isDecimal($invoiceData['net_to_pay_amount'])) {
+            return false;
+        }
+
+        if (is_string($invoiceData['withholding_amount'] ?? null) && $this->isDecimal($invoiceData['withholding_amount'])) {
+            return true;
+        }
+
+        return $this->toMilli($invoiceData['total_amount']) === $this->toMilli($invoiceData['net_to_pay_amount']);
+    }
+
+    /**
      * Check printed gross TTC independently from withholding. Missing values stay inconclusive;
      * this service reports discrepancies and never changes extracted invoice amounts.
      *
@@ -68,6 +90,51 @@ class InvoiceTotalsConsistencyChecker
             $warnings[] = 'invoice_net_to_pay_mismatch';
         }
 
+        // A plausible invoice-level total must also agree with the itemized
+        // amounts when every line subtotal was extracted. This catches model
+        // errors that can otherwise look valid in isolation (for example, a
+        // grouped amount misread as 1,000,000 instead of 1,000).
+        $lines = $invoiceData['lines'] ?? null;
+        if (is_array($lines) && $lines !== []) {
+            $lineSubtotals = array_map(static fn ($line): mixed => is_array($line) ? ($line['subtotal'] ?? null) : null, $lines);
+            if (count(array_filter($lineSubtotals, fn ($amount): bool => is_string($amount) && $this->isDecimal($amount))) === count($lines)
+                && is_string($invoiceData['subtotal'] ?? null)
+                && $this->isDecimal($invoiceData['subtotal'])) {
+                $lineSubtotalMilli = array_sum(array_map(fn (string $amount): int => $this->toMilli($amount), $lineSubtotals));
+                if ($lineSubtotalMilli !== $this->toMilli($invoiceData['subtotal'])) {
+                    $warnings[] = 'invoice_lines_subtotal_mismatch';
+                }
+            }
+
+            $lineVatAmounts = array_map(static fn ($line): mixed => is_array($line) ? ($line['vat_amount'] ?? null) : null, $lines);
+            if (count(array_filter($lineVatAmounts, fn ($amount): bool => is_string($amount) && $this->isDecimal($amount))) === count($lines)
+                && is_string($invoiceData['vat_amount'] ?? null)
+                && $this->isDecimal($invoiceData['vat_amount'])) {
+                $lineVatMilli = array_sum(array_map(fn (string $amount): int => $this->toMilli($amount), $lineVatAmounts));
+                if ($lineVatMilli !== $this->toMilli($invoiceData['vat_amount'])) {
+                    $warnings[] = 'invoice_lines_vat_mismatch';
+                }
+            }
+
+            foreach ($lines as $line) {
+                if (! is_array($line)
+                    || ! is_string($line['subtotal'] ?? null)
+                    || ! $this->isDecimal($line['subtotal'])
+                    || ! is_string($line['vat_rate'] ?? null)
+                    || ! $this->isDecimal($line['vat_rate'])
+                    || ! is_string($line['vat_amount'] ?? null)
+                    || ! $this->isDecimal($line['vat_amount'])) {
+                    continue;
+                }
+
+                if ($this->percentageOf($this->toMilli($line['subtotal']), $this->toMilli($line['vat_rate']))
+                    !== $this->toMilli($line['vat_amount'])) {
+                    $warnings[] = 'invoice_line_vat_rate_mismatch';
+                    break;
+                }
+            }
+        }
+
         return array_values(array_unique($warnings));
     }
 
@@ -78,6 +145,9 @@ class InvoiceTotalsConsistencyChecker
                 'invoice_total_mismatch',
                 'invoice_vat_mismatch',
                 'invoice_net_to_pay_mismatch',
+                'invoice_lines_subtotal_mismatch',
+                'invoice_lines_vat_mismatch',
+                'invoice_line_vat_rate_mismatch',
             ], true)) {
                 return true;
             }

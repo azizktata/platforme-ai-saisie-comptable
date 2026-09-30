@@ -152,6 +152,28 @@ class InvoiceOcrProcessingTest extends TestCase
         );
     }
 
+    public function test_itemized_amounts_are_checked_against_invoice_level_totals(): void
+    {
+        $invoiceData = $this->validAnnotation();
+        $invoiceData['subtotal'] = '1645.000';
+        $invoiceData['vat_rate'] = null;
+        $invoiceData['vat_amount'] = '1645.000';
+        $invoiceData['stamp_amount'] = '1.000';
+        $invoiceData['total_amount'] = '1646.000';
+        $invoiceData['lines'] = [
+            ['subtotal' => '300.000', 'vat_amount' => '0.000'],
+            ['subtotal' => '1000000.000', 'vat_amount' => '0.000'],
+            ['subtotal' => '345.000', 'vat_amount' => '0.000'],
+        ];
+
+        $checker = app(InvoiceTotalsConsistencyChecker::class);
+        $warnings = $checker->warnings($invoiceData);
+
+        $this->assertContains('invoice_lines_subtotal_mismatch', $warnings);
+        $this->assertContains('invoice_lines_vat_mismatch', $warnings);
+        $this->assertTrue($checker->hasBlockingWarnings($warnings));
+    }
+
     public function test_missing_tax_components_make_total_check_inconclusive_instead_of_assuming_zero(): void
     {
         Storage::fake('local');

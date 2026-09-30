@@ -238,7 +238,7 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
             $missingFields = $completenessChecker->missingFields($result->invoiceData);
             $warnings = [
                 ...$totalsChecker->warnings($result->invoiceData),
-                ...$missingFields,
+                ...$completenessChecker->warnings($result->invoiceData),
             ];
 
             $persistence->store($invoice, $result->invoiceData);

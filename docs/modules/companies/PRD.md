@@ -6,7 +6,7 @@ Fournir un périmètre société explicite pour les référentiels comptables et
 
 ## Champs initiaux
 
-Nom d’usage, raison sociale, matricule fiscal, activité, secteur, code pays, devise et identifiant externe Sage facultatif. Les informations peuvent être incomplètes au démarrage et enrichies avant les phases comptables.
+Nom d’usage, raison sociale, matricule fiscal, activité, secteur, code pays, devise, taux de TVA applicables, dates de début et de fin de l’exercice fiscal, seuil d’immobilisation en DT et identifiant externe Sage facultatif. Les paramètres comptables/fiscaux peuvent rester vides jusqu’à leur configuration par société.
 
 ## Comportement et accès
 

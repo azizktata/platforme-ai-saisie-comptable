@@ -19,6 +19,10 @@ type CompanyForm = {
   sector: string;
   country_code: string;
   currency: string;
+  vat_rates: string;
+  fiscal_year_start: string;
+  fiscal_year_end: string;
+  capitalization_threshold: string;
 };
 
 const inputClass = 'mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-teal-600 focus:ring-2 focus:ring-teal-100';
@@ -32,10 +36,15 @@ export default function CompanyProfileCard({ company, canEdit, activities, canMa
     sector: company.sector || '',
     country_code: company.country_code || '',
     currency: company.currency || '',
+    vat_rates: company.vat_rates?.join(', ') || '',
+    fiscal_year_start: company.fiscal_year_start || '',
+    fiscal_year_end: company.fiscal_year_end || '',
+    capitalization_threshold: company.capitalization_threshold || '',
   });
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    form.transform((data) => ({ ...data, vat_rates: data.vat_rates.split(/[;,\s]+/).map((rate) => rate.trim()).filter(Boolean) }));
     form.put(`/companies/${company.id}`, {
       preserveScroll: true,
       onSuccess: () => toast.success('Profil de la société mis à jour.'),
@@ -55,6 +64,9 @@ export default function CompanyProfileCard({ company, canEdit, activities, canMa
         <div className="flex justify-between gap-3"><dt className="text-slate-500">Matricule fiscal</dt><dd className="text-right font-medium text-slate-700">{company.tax_identifier || '—'}</dd></div>
         <div className="flex justify-between gap-3"><dt className="text-slate-500">Activité</dt><dd className="text-right font-medium text-slate-700">{company.activity || '—'}</dd></div>
         <div className="flex justify-between gap-3"><dt className="text-slate-500">Devise</dt><dd className="text-right font-medium text-slate-700">{company.currency || 'À configurer'}</dd></div>
+        <div className="flex justify-between gap-3"><dt className="text-slate-500">Taux TVA</dt><dd className="text-right font-medium text-slate-700">{company.vat_rates?.length ? `${company.vat_rates.join(' %, ')} %` : 'À configurer'}</dd></div>
+        <div className="flex justify-between gap-3"><dt className="text-slate-500">Exercice fiscal</dt><dd className="text-right font-medium text-slate-700">{company.fiscal_year_start && company.fiscal_year_end ? `${company.fiscal_year_start} – ${company.fiscal_year_end}` : 'À configurer'}</dd></div>
+        <div className="flex justify-between gap-3"><dt className="text-slate-500">Seuil d’immobilisation</dt><dd className="text-right font-medium text-slate-700">{company.capitalization_threshold ? `${company.capitalization_threshold} DT` : 'À configurer'}</dd></div>
       </dl>
 
       <div className="mt-4 flex flex-wrap gap-2">
@@ -103,6 +115,12 @@ export default function CompanyProfileCard({ company, canEdit, activities, canMa
                 <input className={inputClass} value={form.data.currency} onChange={(event) => form.setData('currency', event.target.value.toUpperCase())} maxLength={3} />
               </Field>
             </div>
+            <Field label="Taux TVA autorisés (%) — séparés par des virgules" error={form.errors.vat_rates || (form.errors as Record<string, string | undefined>)['vat_rates.0']}><input className={inputClass} value={form.data.vat_rates} onChange={(event) => form.setData('vat_rates', event.target.value)} placeholder="0, 7, 13, 19" /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Exercice fiscal · début" error={form.errors.fiscal_year_start}><input type="date" className={inputClass} value={form.data.fiscal_year_start} onChange={(event) => form.setData('fiscal_year_start', event.target.value)} /></Field>
+              <Field label="Exercice fiscal · fin" error={form.errors.fiscal_year_end}><input type="date" className={inputClass} value={form.data.fiscal_year_end} onChange={(event) => form.setData('fiscal_year_end', event.target.value)} /></Field>
+            </div>
+            <Field label="Seuil d’immobilisation (DT) / Capitalization Threshold" error={form.errors.capitalization_threshold}><input type="number" min="0" step="0.001" className={inputClass} value={form.data.capitalization_threshold} onChange={(event) => form.setData('capitalization_threshold', event.target.value)} placeholder="Ex. 1000.000" /></Field>
             <button type="submit" disabled={form.processing} className="w-full rounded-lg border border-teal-700 px-3 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:opacity-60">
               {form.processing ? 'Enregistrement…' : 'Enregistrer le profil'}
             </button>

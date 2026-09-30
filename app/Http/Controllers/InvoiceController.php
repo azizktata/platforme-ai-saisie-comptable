@@ -14,6 +14,7 @@ use App\Models\Company;
 use App\Models\Invoice;
 use App\Models\User;
 use App\Services\Invoices\AccountingProposalBalanceChecker;
+use App\Services\Invoices\InvoiceConfidenceEngine;
 use App\Services\Invoices\InvoiceDataCompletenessChecker;
 use App\Services\Invoices\InvoiceDataPersistence;
 use App\Services\Invoices\StoreInvoiceUpload;
@@ -59,8 +60,8 @@ class InvoiceController extends Controller
             'maxUploadFileSizeBytes' => $this->maxUploadFileSizeBytes(),
             'companies' => $this->companyOptions($companies),
             'company' => $company ? $this->companySummary($company) : null,
-            'invoices' => $company ? $this->invoicePaginator($company) : null,
-            'invoiceStats' => $company ? $this->invoiceStats($company) : null,
+            'invoices' => $company ? $this->invoicePaginator($company, $user) : null,
+            'invoiceStats' => $company ? $this->invoiceStats($company, $user) : null,
             'canUploadInvoices' => $company !== null && $user->can('manageInvoices', $company),
             'canReviewInvoices' => $company !== null && $user->can('manageInvoices', $company),
         ]);
@@ -99,6 +100,31 @@ class InvoiceController extends Controller
             ],
             'back_url' => route('invoices.index', ['company_id' => $company->id], false),
         ]);
+    }
+
+    public function clearWorkspace(Request $request, Company $company): RedirectResponse
+    {
+        $this->authorize('manageInvoices', $company);
+        /** @var User $user */
+        $user = $request->user();
+        $dismissedAt = now();
+        $invoiceIds = $company->invoices()
+            ->whereNotIn('id', DB::table('invoice_workspace_dismissals')
+                ->select('invoice_id')
+                ->where('user_id', $user->id))
+            ->pluck('id');
+
+        if ($invoiceIds->isNotEmpty()) {
+            DB::table('invoice_workspace_dismissals')->insertOrIgnore(
+                $invoiceIds->map(fn (int $invoiceId): array => [
+                    'user_id' => $user->id,
+                    'invoice_id' => $invoiceId,
+                    'dismissed_at' => $dismissedAt,
+                ])->all(),
+            );
+        }
+
+        return back()->with('success', 'Votre espace de travail est vidé. Les factures restent disponibles dans l’historique de la société.');
     }
 
     public function upload(
@@ -399,6 +425,7 @@ class InvoiceController extends Controller
         InvoiceOcrSchema $schema,
         InvoiceTotalsConsistencyChecker $totalsChecker,
         AccountingProposalBalanceChecker $balanceChecker,
+        InvoiceConfidenceEngine $confidenceEngine,
     ): JsonResponse {
         $this->authorize('view', $company);
         abort_unless((int) $invoice->company_id === (int) $company->id, 404);
@@ -412,10 +439,30 @@ class InvoiceController extends Controller
             ? []
             : $balanceChecker->warnings($invoice, $proposal->lines);
         $totalsWarnings = $totalsChecker->warnings($invoiceData);
-        $hasDuplicate = $company->invoices()
+        $hasFileDuplicate = $company->invoices()
             ->where('file_sha256', $invoice->file_sha256)
             ->where('id', '<>', $invoice->id)
             ->exists();
+        $invoiceNumber = trim((string) ($invoiceData['invoice_number'] ?? ''));
+        $supplierTaxIdentifier = mb_strtolower(trim((string) ($invoiceData['supplier_tax_identifier'] ?? '')));
+        $supplierName = mb_strtolower(trim((string) ($invoiceData['supplier_name'] ?? '')));
+        $hasInvoiceDuplicate = false;
+
+        if ($invoiceNumber !== '' && ($supplierTaxIdentifier !== '' || $supplierName !== '')) {
+            $sameNumberInvoices = $company->invoices()
+                ->where('id', '<>', $invoice->id)
+                ->whereRaw('LOWER(TRIM(invoice_number)) = ?', [mb_strtolower($invoiceNumber)])
+                ->get(['id', 'supplier_name', 'supplier_tax_identifier']);
+            $hasInvoiceDuplicate = $sameNumberInvoices->contains(static function (Invoice $candidate) use ($supplierTaxIdentifier, $supplierName): bool {
+                $candidateTaxIdentifier = mb_strtolower(trim((string) $candidate->supplier_tax_identifier));
+                $candidateSupplierName = mb_strtolower(trim((string) $candidate->supplier_name));
+
+                return ($supplierTaxIdentifier !== '' && $candidateTaxIdentifier !== '' && $candidateTaxIdentifier === $supplierTaxIdentifier)
+                    || ($supplierName !== '' && $candidateSupplierName !== '' && $candidateSupplierName === $supplierName);
+            });
+        }
+        $hasDuplicate = $hasFileDuplicate || $hasInvoiceDuplicate;
+        $confidence = $confidenceEngine->assess($company, $invoiceData, $proposal, $totalsWarnings, $proposalWarnings, $hasDuplicate);
         $currency = strtoupper((string) ($invoiceData['currency'] ?? $invoice->currency));
         $companyCurrency = strtoupper((string) ($company->currency ?: 'TND'));
         $activeReferences = $proposal !== null
@@ -438,49 +485,96 @@ class InvoiceController extends Controller
                     && $line->analyticalAccount->is_active
                     && (int) $line->analyticalAccount->company_id === (int) $company->id
                 )));
-        $confidenceScores = $proposal?->lines
-            ->pluck('confidence')
-            ->filter(fn ($score): bool => $score !== null) ?? collect();
         $invoiceTotalMismatch = in_array('invoice_total_mismatch', $totalsWarnings, true);
         $invoiceVatMismatch = in_array('invoice_vat_mismatch', $totalsWarnings, true);
+        $invoiceLinesSubtotalMismatch = in_array('invoice_lines_subtotal_mismatch', $totalsWarnings, true);
+        $invoiceLinesVatMismatch = in_array('invoice_lines_vat_mismatch', $totalsWarnings, true);
+        $invoiceLineVatRateMismatch = in_array('invoice_line_vat_rate_mismatch', $totalsWarnings, true);
         $netToPayMismatch = in_array('invoice_net_to_pay_mismatch', $totalsWarnings, true);
         $proposalTotalMismatch = in_array('proposal_invoice_total_mismatch', $proposalWarnings, true);
         $totalsUnverified = in_array('invoice_totals_unverified', $totalsWarnings, true);
-        $netCheckAvailable = is_string($invoiceData['total_amount'] ?? null)
-            && is_string($invoiceData['withholding_amount'] ?? null)
-            && is_string($invoiceData['net_to_pay_amount'] ?? null);
+        $invoiceLines = is_array($invoiceData['lines'] ?? null) ? $invoiceData['lines'] : [];
+        $netCheckAvailable = $totalsChecker->canVerifyNetToPay($invoiceData);
         $vatCheckAvailable = is_string($invoiceData['subtotal'] ?? null)
             && is_string($invoiceData['vat_rate'] ?? null)
             && is_string($invoiceData['vat_amount'] ?? null);
-        $supplierName = trim((string) ($invoiceData['supplier_name'] ?? ''));
-        $invoiceNumber = trim((string) ($invoiceData['invoice_number'] ?? ''));
-        $supplierNotLinked = in_array('supplier_not_linked', $proposalWarnings, true);
+        $lineVatCheckAvailable = $invoiceLines !== [] && count(array_filter($invoiceLines, static fn ($line): bool => is_array($line)
+            && is_string($line['subtotal'] ?? null)
+            && is_string($line['vat_rate'] ?? null)
+            && is_string($line['vat_amount'] ?? null))) === count($invoiceLines);
+        $configuredVatRates = array_map(
+            static fn ($rate): string => rtrim(rtrim(number_format((float) $rate, 3, '.', ''), '0'), '.'),
+            $company->vat_rates ?? [],
+        );
+        $printedVatRates = array_filter([
+            $invoiceData['vat_rate'] ?? null,
+            ...array_map(static fn ($line): mixed => is_array($line) ? ($line['vat_rate'] ?? null) : null, $invoiceLines),
+        ], static fn ($rate): bool => is_string($rate) && is_numeric($rate));
+        $unconfiguredVatRates = $configuredVatRates === [] ? [] : array_values(array_unique(array_filter(
+            array_map(static fn ($rate): string => rtrim(rtrim(number_format((float) $rate, 3, '.', ''), '0'), '.'), $printedVatRates),
+            static fn ($rate): bool => ! in_array($rate, $configuredVatRates, true),
+        )));
+        $vatRateUnconfigured = $unconfiguredVatRates !== [];
+        $missingGrossAmounts = array_values(array_filter([
+            'subtotal' => 'Total HT',
+            'vat_amount' => 'TVA',
+            'fodec_amount' => 'FODEC',
+            'other_tax_amount' => 'autres taxes',
+            'stamp_amount' => 'timbre fiscal',
+            'total_amount' => 'TTC brut',
+        ], static fn (string $label, string $field): bool => ! is_string($invoiceData[$field] ?? null)
+            || ! preg_match('/^-?\d{1,15}(?:\.\d{1,3})?$/', $invoiceData[$field]), ARRAY_FILTER_USE_BOTH));
+        $missingNetAmounts = $netCheckAvailable ? [] : array_values(array_filter([
+            ! is_string($invoiceData['withholding_amount'] ?? null) ? 'retenue à la source' : null,
+            ! is_string($invoiceData['net_to_pay_amount'] ?? null) ? 'net à payer' : null,
+        ]));
+        $missingAmountDetail = implode(', ', [...$missingGrossAmounts, ...$missingNetAmounts]) ?: 'certains montants';
+        $invoiceDate = $invoiceData['invoice_date'] ?? null;
+        $fiscalYearConfigured = $company->fiscal_year_start !== null && $company->fiscal_year_end !== null;
+        $invoiceDateInFiscalYear = is_string($invoiceDate) && $fiscalYearConfigured
+            && $invoiceDate >= $company->fiscal_year_start->toDateString()
+            && $invoiceDate <= $company->fiscal_year_end->toDateString();
+        $supplierMatched = $confidence['indicators']['supplier']['matched'];
         $accountingTotalMismatch = $invoiceTotalMismatch || $proposalTotalMismatch;
+        $totalsDetail = match (true) {
+            $invoiceTotalMismatch => 'La somme HT + TVA + FODEC + autres taxes + timbre ne correspond pas au TTC imprimé (hors retenue).',
+            $proposalTotalMismatch => 'Le total des débits de la proposition ne correspond pas au TTC brut attendu.',
+            $invoiceVatMismatch => 'Le montant de TVA ne correspond pas au taux et à la base déclarés.',
+            $netToPayMismatch => 'Le net à payer ne correspond pas au TTC diminué de la retenue.',
+            $invoiceLinesSubtotalMismatch => 'La somme des montants HT extraits des lignes diffère du sous-total global.',
+            $invoiceLinesVatMismatch => 'La somme des montants TVA extraits des lignes diffère de la TVA globale.',
+            $invoiceLineVatRateMismatch => 'Au moins une ligne de TVA ne correspond pas à son taux et à son montant HT.',
+            $totalsUnverified || ! $netCheckAvailable => "Contrôle en attente : {$missingAmountDetail} à vérifier ou saisir (indiquer 0.000 si aucun montant n’est imprimé).",
+            default => 'Les montants extraits sont cohérents selon le contrôle serveur.',
+        };
+        $vatDetail = match (true) {
+            $invoiceVatMismatch => 'Le montant de TVA ne correspond pas au taux global et au montant HT selon le calcul serveur.',
+            $invoiceLinesVatMismatch => 'La somme de la TVA extraite des lignes diffère du montant global de TVA.',
+            $invoiceLineVatRateMismatch => 'Au moins une ligne de TVA ne correspond pas à son taux et à son montant HT.',
+            $vatRateUnconfigured => 'Taux non configuré détecté : '.implode(' %, ', $unconfiguredVatRates).' %. Taux admis : '.implode(' %, ', $configuredVatRates).' %.',
+            $lineVatCheckAvailable => 'Les montants de TVA correspondent aux taux déclarés sur les lignes.',
+            $vatCheckAvailable => 'Le montant de TVA correspond au taux global déclaré et au montant HT.',
+            default => 'Taux global ou montant de TVA indisponible ; le calcul de contrôle ne peut pas être confirmé.',
+        };
 
         $checks = [
             'supplier' => [
-                'status' => $proposal === null ? 'pending' : ($supplierNotLinked ? 'warning' : 'passed'),
-                'detail' => $proposal === null
-                    ? 'Le rapprochement du fournisseur avec un tiers sera vérifié après la proposition.'
-                    : ($supplierNotLinked
-                        ? ($supplierName !== ''
-                            ? "« {$supplierName} » n’est associé à aucun tiers fournisseur actif ; vérifiez ou créez la fiche tiers."
-                            : 'Aucun tiers fournisseur actif n’est associé à cette proposition.')
-                        : 'Un tiers fournisseur actif de cette société est associé à l’écriture.'),
+                'status' => $supplierMatched ? 'passed' : 'warning',
+                'detail' => implode(' ', $confidence['indicators']['supplier']['evidence']),
             ],
             'invoice_number' => [
-                'status' => $invoiceNumber === '' ? 'pending' : 'unavailable',
+                'status' => $invoiceNumber === '' ? 'pending' : ($hasInvoiceDuplicate ? 'warning' : 'passed'),
                 'detail' => $invoiceNumber === ''
                     ? 'Aucun numéro de facture n’a été extrait.'
-                    : "Référence extraite : {$invoiceNumber}. Aucun contrôle de doublon de numéro n’est configuré ; vérification manuelle requise.",
+                    : ($hasInvoiceDuplicate
+                        ? "Le numéro {$invoiceNumber} apparaît déjà dans cette société avec un fournisseur identique. Vérifiez s’il s’agit d’une facture déjà traitée."
+                        : "Le numéro {$invoiceNumber} n’a pas été trouvé pour le même fournisseur dans cette société."),
             ],
             'vat' => [
-                'status' => $invoiceVatMismatch ? 'blocking' : ($vatCheckAvailable ? 'passed' : 'pending'),
-                'detail' => $invoiceVatMismatch
-                    ? 'Le montant de TVA ne correspond pas au taux global et au montant HT selon le calcul serveur.'
-                    : ($vatCheckAvailable
-                        ? 'Le montant de TVA correspond au taux global déclaré et au montant HT.'
-                        : 'Taux global ou montant de TVA indisponible ; le calcul de contrôle ne peut pas être confirmé.'),
+                'status' => ($invoiceVatMismatch || $invoiceLinesVatMismatch || $invoiceLineVatRateMismatch)
+                    ? 'blocking'
+                    : ($vatRateUnconfigured ? 'warning' : (($vatCheckAvailable || $lineVatCheckAvailable) ? 'passed' : 'pending')),
+                'detail' => $vatDetail,
             ],
             'balance' => [
                 'status' => $proposal === null ? 'pending' : (in_array('proposal_unbalanced', $proposalWarnings, true) ? 'blocking' : 'passed'),
@@ -491,26 +585,20 @@ class InvoiceController extends Controller
                         : 'Les débits et crédits sont équilibrés selon le contrôle serveur.'),
             ],
             'totals' => [
-                'status' => ($accountingTotalMismatch || $invoiceVatMismatch || $netToPayMismatch)
+                'status' => ($accountingTotalMismatch || $invoiceVatMismatch || $netToPayMismatch || $invoiceLinesSubtotalMismatch || $invoiceLinesVatMismatch || $invoiceLineVatRateMismatch)
                     ? 'blocking'
                     : (($totalsUnverified || ! $netCheckAvailable) ? 'pending' : 'passed'),
-                'detail' => $invoiceTotalMismatch
-                    ? 'La somme HT + TVA + FODEC + autres taxes + timbre ne correspond pas au TTC imprimé (hors retenue).'
-                    : ($proposalTotalMismatch
-                        ? 'Le total des débits de la proposition ne correspond pas au TTC brut attendu.'
-                        : ($invoiceVatMismatch
-                            ? 'Le montant de TVA ne correspond pas au taux et à la base déclarés.'
-                            : ($netToPayMismatch
-                                ? 'Le net à payer ne correspond pas au TTC diminué de la retenue.'
-                                : (($totalsUnverified || ! $netCheckAvailable)
-                                    ? 'Certains composants du TTC ou du net (retenue/net à payer) sont absents ; le contrôle reste en attente.'
-                                    : 'Les montants extraits sont cohérents selon le contrôle serveur.')))),
+                'detail' => $totalsDetail,
             ],
             'duplicate' => [
                 'status' => $hasDuplicate ? 'warning' : 'passed',
                 'detail' => $hasDuplicate
-                    ? 'Une autre facture de cette société possède la même empreinte de fichier. Vérifiez qu’il ne s’agit pas d’un doublon comptable.'
-                    : 'Aucun fichier identique n’a été trouvé dans cette société.',
+                    ? implode(' ', array_filter([
+                        $hasFileDuplicate ? 'Une autre facture de cette société possède la même empreinte de fichier.' : null,
+                        $hasInvoiceDuplicate ? 'Une facture du même fournisseur porte le même numéro.' : null,
+                        'Vérifiez qu’il ne s’agit pas d’un doublon comptable.',
+                    ]))
+                    : 'Aucun fichier identique ni numéro déjà utilisé pour ce fournisseur n’a été trouvé dans cette société.',
             ],
             'accounts' => [
                 'status' => $proposal === null ? 'pending' : ($activeReferences ? 'passed' : 'blocking'),
@@ -521,8 +609,14 @@ class InvoiceController extends Controller
                         : 'Au moins une référence de la proposition est absente, inactive ou rattachée à une autre société.'),
             ],
             'fiscal_year' => [
-                'status' => 'unavailable',
-                'detail' => 'Aucun exercice fiscal n’est configuré dans le système ; vérification manuelle requise.',
+                'status' => ! $fiscalYearConfigured ? 'unavailable' : (! is_string($invoiceDate) ? 'pending' : ($invoiceDateInFiscalYear ? 'passed' : 'blocking')),
+                'detail' => ! $fiscalYearConfigured
+                    ? 'Aucun exercice fiscal n’est configuré pour cette société.'
+                    : (! is_string($invoiceDate)
+                        ? 'La date de facture est nécessaire pour vérifier l’exercice fiscal configuré.'
+                        : ($invoiceDateInFiscalYear
+                            ? "La date de facture est comprise dans l’exercice {$company->fiscal_year_start->toDateString()} – {$company->fiscal_year_end->toDateString()}."
+                            : "La date de facture est hors de l’exercice configuré ({$company->fiscal_year_start->toDateString()} – {$company->fiscal_year_end->toDateString()}).")),
             ],
             'currency' => [
                 'status' => $currency === '' ? 'pending' : ($currency === $companyCurrency ? 'passed' : 'blocking'),
@@ -543,7 +637,10 @@ class InvoiceController extends Controller
                 'ocr_text' => $invoice->ocr_text,
                 'ocr_display_text' => $invoice->ocr_text ?? ($invoice->extraction_model === null && str_starts_with((string) $invoice->ocr_model, 'ocr.space-engine-') ? $invoice->description : null),
                 'ocr_data' => $invoiceData,
-                'ocr_warnings' => $invoice->ocr_warnings ?? [],
+                'ocr_warnings' => array_values(array_unique([
+                    ...(array) ($invoice->ocr_warnings ?? []),
+                    ...$totalsWarnings,
+                ])),
                 'ocr_error_message' => $invoice->ocr_error_message,
                 'ocr_model' => $invoice->ocr_model,
                 'extraction_provider' => (string) config('services.invoice_extraction.provider', 'openrouter'),
@@ -552,9 +649,13 @@ class InvoiceController extends Controller
                 'accounting_exported_at' => $invoice->accounting_exported_at?->toIso8601String(),
             ],
             'checks' => $checks,
+            'confidence' => $confidence,
             'company_profile' => [
                 'activity' => $company->activity,
                 'sector' => $company->sector,
+                'fiscal_year_start' => $company->fiscal_year_start?->toDateString(),
+                'fiscal_year_end' => $company->fiscal_year_end?->toDateString(),
+                'capitalization_threshold' => $company->capitalization_threshold,
             ],
             'proposal' => $proposal === null ? null : [
                 'id' => $proposal->id,
@@ -570,7 +671,6 @@ class InvoiceController extends Controller
                 'model' => $proposal->model,
                 'modified_at' => $proposal->modified_at?->toIso8601String(),
                 'journal_entry_id' => $proposal->journal_entry_id,
-                'confidence' => $confidenceScores->isEmpty() ? null : round((float) $confidenceScores->avg(), 4),
                 'lines' => $proposal->lines->map(fn ($line): array => [
                     'id' => $line->id,
                     'chart_account_id' => $line->chart_account_id,
@@ -585,7 +685,6 @@ class InvoiceController extends Controller
                     'description' => $line->description,
                     'debit' => $line->debit,
                     'credit' => $line->credit,
-                    'confidence' => $line->confidence,
                 ])->values()->all(),
             ],
             'options' => [
@@ -594,6 +693,7 @@ class InvoiceController extends Controller
                 'third_parties' => $company->thirdParties()->where('is_active', true)->whereIn('party_type', ['supplier', 'both'])->orderBy('code')->get(['id', 'code', 'name'])->toArray(),
                 'analytical_accounts' => $company->analyticalAccounts()->where('is_active', true)->orderBy('code')->get(['id', 'code', 'label'])->toArray(),
                 'invoice_types' => InvoiceType::options(),
+                'vat_rates' => $configuredVatRates,
             ],
             'can_manage' => $user?->can('manageInvoices', $company) === true,
         ])->header('Cache-Control', 'private, no-store');
@@ -622,7 +722,7 @@ class InvoiceController extends Controller
         $missingFields = $completenessChecker->missingFields($invoiceData);
         $warnings = array_values(array_unique([
             ...$totalsChecker->warnings($invoiceData),
-            ...$missingFields,
+            ...$completenessChecker->warnings($invoiceData),
         ]));
         $reviewer = $request->user();
 
@@ -665,23 +765,13 @@ class InvoiceController extends Controller
                 'ocr_error_message' => $missingFields === []
                     ? null
                     : 'Les données obligatoires de la facture sont incomplètes. Corrigez les champs signalés avant l’analyse comptable.',
-                'status' => $missingFields === [] ? 'accounting_analysis' : 'invoice_incomplete',
+                'status' => $missingFields === [] ? 'ocr_completed' : 'invoice_incomplete',
             ])->save();
         });
 
-        if ($missingFields === []) {
-            try {
-                AnalyzeAccountingProposal::dispatch($invoice->id, $company->id);
-            } catch (\Throwable) {
-                $this->markStageQueueFailure($company, $invoice, 'accounting_analysis');
-
-                return back()->withErrors(['processing' => 'Les données sont enregistrées, mais l’analyse comptable n’a pas pu être planifiée. Vous pouvez la relancer.']);
-            }
-
-            return back()->with('success', 'Les données sont enregistrées. L’analyse comptable démarre automatiquement.');
-        }
-
-        return back()->with('success', 'Les corrections sont enregistrées. Complétez les champs obligatoires avant l’analyse comptable.');
+        return back()->with('success', $missingFields === []
+            ? 'Les corrections sont enregistrées. Générez la proposition comptable lorsque les données sont prêtes.'
+            : 'Les corrections sont enregistrées. Complétez les champs obligatoires avant de générer la proposition.');
     }
 
     public function bulkReview(BulkReviewInvoicesRequest $request, Company $company): RedirectResponse
@@ -790,9 +880,17 @@ class InvoiceController extends Controller
     }
 
     /** @return array{total: int, to_analyze: int, in_analysis: int, to_review: int, validated: int, exported: int} */
-    private function invoiceStats(Company $company): array
+    private function invoiceStats(Company $company, ?User $workspaceUser = null): array
     {
-        $counts = $company->invoices()
+        $query = $company->invoices();
+
+        if ($workspaceUser !== null) {
+            $query->whereNotIn('id', DB::table('invoice_workspace_dismissals')
+                ->select('invoice_id')
+                ->where('user_id', $workspaceUser->id));
+        }
+
+        $counts = $query
             ->selectRaw('status, COUNT(*) as aggregate')
             ->groupBy('status')
             ->pluck('aggregate', 'status');
@@ -808,10 +906,17 @@ class InvoiceController extends Controller
         ];
     }
 
-    private function invoicePaginator(Company $company): LengthAwarePaginator
+    private function invoicePaginator(Company $company, ?User $workspaceUser = null): LengthAwarePaginator
     {
-        return $company->invoices()
-            ->with(['accountingProposal.lines:id,accounting_proposal_id,confidence'])
+        $query = $company->invoices()->with('accountingProposal.lines');
+
+        if ($workspaceUser !== null) {
+            $query->whereNotIn('id', DB::table('invoice_workspace_dismissals')
+                ->select('invoice_id')
+                ->where('user_id', $workspaceUser->id));
+        }
+
+        return $query
             ->orderByDesc('created_at')
             ->orderByDesc('id')
             ->paginate(20, [
@@ -828,6 +933,7 @@ class InvoiceController extends Controller
                 'status',
                 'ocr_attempts',
                 'ocr_error_message',
+                'ocr_data',
                 'ocr_warnings',
                 'ocr_reviewed_at',
                 'accounting_exported_at',
@@ -845,28 +951,31 @@ class InvoiceController extends Controller
                 'currency' => $invoice->currency,
                 'description' => $invoice->description,
                 'status' => $invoice->status,
-                'proposal_confidence' => $this->proposalConfidence($invoice),
                 'ocr_attempts' => $invoice->ocr_attempts,
                 'ocr_error_message' => $invoice->ocr_error_message,
-                'ocr_warnings' => $invoice->ocr_warnings ?? [],
                 'ocr_reviewed_at' => $invoice->ocr_reviewed_at?->toIso8601String(),
                 'accounting_exported_at' => $invoice->accounting_exported_at?->toIso8601String(),
                 'created_at' => $invoice->created_at->toIso8601String(),
+                'confidence' => $this->proposalConfidence($invoice),
+                'ocr_warnings' => array_values(array_unique([
+                    ...(array) ($invoice->ocr_warnings ?? []),
+                    ...app(InvoiceTotalsConsistencyChecker::class)->warnings($invoice->ocr_data ?? []),
+                ])),
                 'download_url' => route('companies.invoices.download', [$company, $invoice], false),
             ]);
     }
 
     private function proposalConfidence(Invoice $invoice): ?float
     {
-        $lines = $invoice->accountingProposal?->lines;
-
-        if ($lines === null) {
+        if (! in_array($invoice->status, ['proposal_ready', 'proposal_rejected', 'accounting_validated', 'accounting_exported'], true)) {
             return null;
         }
 
-        $scores = $lines->pluck('confidence')->filter(fn ($score): bool => $score !== null);
+        $scores = $invoice->accountingProposal?->lines
+            ->pluck('confidence')
+            ->filter(fn ($score): bool => $score !== null);
 
-        return $scores->isEmpty() ? null : round((float) $scores->avg(), 4);
+        return $scores?->isNotEmpty() ? round((float) $scores->avg(), 4) : null;
     }
 
     private function markOcrQueueFailure(Invoice $invoice): void

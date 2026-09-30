@@ -23,6 +23,10 @@ type CompanyForm = {
   sector: string;
   country_code: string;
   currency: string;
+  vat_rates: string;
+  fiscal_year_start: string;
+  fiscal_year_end: string;
+  capitalization_threshold: string;
 };
 
 const inputClass = 'mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-teal-600 focus:ring-2 focus:ring-teal-100';
@@ -36,10 +40,15 @@ export default function CompaniesIndex({ companies, canCreateCompany, canManageA
     sector: '',
     country_code: 'TN',
     currency: 'TND',
+    vat_rates: '',
+    fiscal_year_start: '',
+    fiscal_year_end: '',
+    capitalization_threshold: '',
   });
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    form.transform((data) => ({ ...data, vat_rates: data.vat_rates.split(/[;,\s]+/).map((rate) => rate.trim()).filter(Boolean) }));
     form.post('/companies', {
       preserveScroll: true,
       onSuccess: () => {
@@ -101,6 +110,7 @@ export default function CompaniesIndex({ companies, canCreateCompany, canManageA
                   <input className={inputClass} value={form.data.currency} onChange={(event) => form.setData('currency', event.target.value.toUpperCase())} maxLength={3} />
                 </Field>
               </div>
+              <PolicyFields data={form.data} setData={form.setData} errors={form.errors} />
               <div className="flex items-center justify-end gap-3 md:col-span-2">
                 {form.errors.name && <p className="mr-auto text-sm text-red-700">{form.errors.name}</p>}
                 <button type="submit" disabled={form.processing} className="rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60">
@@ -127,6 +137,19 @@ export default function CompaniesIndex({ companies, canCreateCompany, canManageA
       </section>
     </AppShell>
   );
+}
+
+function PolicyFields({ data, setData, errors }: { data: CompanyForm; setData: (key: keyof CompanyForm, value: string) => void; errors: Record<string, string> }) {
+  return <>
+    <Field label="Taux TVA autorisés (%) — séparés par des virgules" error={errors['vat_rates.0'] || errors.vat_rates}>
+      <input className={inputClass} value={data.vat_rates} onChange={(event) => setData('vat_rates', event.target.value)} placeholder="0, 7, 13, 19" />
+    </Field>
+    <div className="grid grid-cols-2 gap-3">
+      <Field label="Exercice fiscal · début" error={errors.fiscal_year_start}><input type="date" className={inputClass} value={data.fiscal_year_start} onChange={(event) => setData('fiscal_year_start', event.target.value)} /></Field>
+      <Field label="Exercice fiscal · fin" error={errors.fiscal_year_end}><input type="date" className={inputClass} value={data.fiscal_year_end} onChange={(event) => setData('fiscal_year_end', event.target.value)} /></Field>
+    </div>
+    <Field label="Seuil d’immobilisation (DT) / Capitalization Threshold" error={errors.capitalization_threshold}><input type="number" min="0" step="0.001" className={inputClass} value={data.capitalization_threshold} onChange={(event) => setData('capitalization_threshold', event.target.value)} placeholder="Ex. 1000.000" /></Field>
+  </>;
 }
 
 function Field({ label, error, children }: { label: string; error?: string; children: ReactNode }) {

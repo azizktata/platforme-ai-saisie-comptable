@@ -22,12 +22,20 @@ class Company extends Model
         'country_code',
         'currency',
         'sage_identifier',
+        'vat_rates',
+        'fiscal_year_start',
+        'fiscal_year_end',
+        'capitalization_threshold',
     ];
 
     protected function casts(): array
     {
         return [
             'cabinet_id' => 'integer',
+            'vat_rates' => 'array',
+            'fiscal_year_start' => 'date:Y-m-d',
+            'fiscal_year_end' => 'date:Y-m-d',
+            'capitalization_threshold' => 'decimal:3',
         ];
     }
 

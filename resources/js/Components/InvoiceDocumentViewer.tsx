@@ -39,7 +39,7 @@ export default function InvoiceDocumentViewer({ filename, mimeType, previewUrl, 
   const rotate = (amount: number) => setRotation((current) => (current + amount + 360) % 360);
 
   return (
-    <section ref={container} className="flex h-[65vh] min-h-[380px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm xl:h-full xl:min-h-0" aria-label="Document original">
+    <section ref={container} className="flex h-[65vh] min-h-[380px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm xl:h-[65vh] xl:min-h-[420px]" aria-label="Document original">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-3 py-3">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-slate-900">Document original</h2>

@@ -112,7 +112,7 @@ class InvoiceOcrSchema
     public function annotationPrompt(): string
     {
         return <<<'PROMPT'
-Extract only information explicitly visible on this supplier invoice. Return null for any missing, unreadable, or ambiguous value. Copy dates, currency labels, amounts, quantities, rates, and contact details as printed; Laravel will normalize and validate them. Do not infer, invent, calculate, sum, or reconcile any value. Do not interpret isolated numbers as invoice lines unless the OCR clearly associates them with a described line item. Preserve printed descriptions and references. Put FODEC in its dedicated fields and use other_tax only for a separate tax. Return an invoice-level VAT or FODEC rate only when one unique global rate is explicitly printed; when rates vary by line, return null at invoice level and preserve the individual line rates. Keep invoice-level totals distinct from line-level amounts. Do not create accounting accounts, journals, or accounting entries.
+Extract only information explicitly visible on this supplier invoice. Return null for any missing, unreadable, or ambiguous value. Return numeric amounts as plain decimal strings using a period as the decimal mark and no grouping separators, currency symbol, or surrounding punctuation. Preserve the printed value and scale: for example, 1 645.000 becomes 1645.000 and 1.000,000 becomes 1000.000. Use nearby labels, column alignment, repeated formatting, and the currency's precision to distinguish decimal marks from digit grouping; if the value remains ambiguous, return null. Never turn a value such as 1.000 into 1000 merely because it has three digits after punctuation. For rates, return only the numeric percentage without the percent sign. For explicit currency symbols, map € to EUR, $ to USD, and £ to GBP. Do not infer a currency when no symbol or currency label appears. Do not infer, invent, calculate, sum, or reconcile any value. Do not interpret isolated numbers as invoice lines unless the OCR clearly associates them with a described line item. Preserve printed descriptions and references. Put FODEC in its dedicated fields and use other_tax only for a separate tax. Return an invoice-level VAT or FODEC rate only when one unique global rate is explicitly printed; when rates vary by line, return null at invoice level and preserve the individual line rates. Keep invoice-level totals distinct from line-level amounts. Do not create accounting accounts, journals, or accounting entries.
 PROMPT;
     }
 
@@ -214,7 +214,7 @@ PROMPT;
     {
         return [
             'type' => ['string', 'null'],
-            'description' => $description.' Copy the printed value without converting separators or units; use null if unavailable.',
+            'description' => $description.' Return a plain decimal string with a period as decimal mark and no digit-grouping separators or currency symbol (for example, 1 645.000 → 1645.000). Preserve the value; use null if the separators are ambiguous.',
         ];
     }
 
@@ -222,7 +222,7 @@ PROMPT;
     {
         return [
             'type' => ['string', 'null'],
-            'description' => $description.' Copy the printed rate, including its percent marker if present; use null if unavailable.',
+            'description' => $description.' Return the numeric percentage without a percent sign; use null if unavailable or ambiguous.',
         ];
     }
 
@@ -286,6 +286,12 @@ PROMPT;
 
         $value = trim($value);
         $compact = mb_strtoupper(preg_replace('/[^A-Za-z]/u', '', $value) ?? '');
+
+        // OCR commonly preserves the euro glyph but omits the written currency
+        // name. Normalize explicit symbols before the text-based fallbacks.
+        if (str_contains($value, '€')) {
+            return 'EUR';
+        }
 
         if (preg_match('/^[A-Z]{3}$/', $compact) === 1) {
             return $compact;
