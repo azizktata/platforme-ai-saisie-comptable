@@ -74,6 +74,8 @@ class Invoice extends Model
         'ocr_error_message',
         'ocr_reviewed_at',
         'ocr_reviewed_by',
+        'accounting_exported_at',
+        'accounting_exported_by',
     ];
 
     protected function casts(): array
@@ -111,6 +113,8 @@ class Invoice extends Model
             'ocr_reviewed_by' => 'integer',
             'extraction_corrected_by' => 'integer',
             'extraction_corrected_at' => 'datetime',
+            'accounting_exported_at' => 'datetime',
+            'accounting_exported_by' => 'integer',
         ];
     }
 

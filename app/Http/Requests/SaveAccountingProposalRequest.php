@@ -2,9 +2,11 @@
 
 namespace App\Http\Requests;
 
+use App\Enums\InvoiceType;
 use App\Models\Company;
 use App\Models\Invoice;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class SaveAccountingProposalRequest extends FormRequest
 {
@@ -22,6 +24,7 @@ class SaveAccountingProposalRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'invoice_type' => ['sometimes', 'required', 'string', Rule::in(InvoiceType::values())],
             'journal_id' => ['required', 'integer', 'min:1'],
             'entry_description' => ['required', 'string', 'max:255'],
             'lines' => ['required', 'array', 'min:2', 'max:100'],

@@ -108,6 +108,7 @@ class OpenRouterInvoicePipelineTest extends TestCase
         $accountingProposal = $invoice->accountingProposal()->with('lines')->firstOrFail();
         $this->assertSame('proposal_ready', $invoice->status);
         $this->assertSame('ready', $accountingProposal->status);
+        $this->assertSame('it_invoice', $accountingProposal->invoice_type);
         $this->assertSame('ACH', $accountingProposal->journal->code);
         $this->assertSame([], $accountingProposal->warnings);
         $this->assertCount(3, $accountingProposal->lines);
@@ -126,6 +127,14 @@ class OpenRouterInvoicePipelineTest extends TestCase
         $this->assertSame('ai_proposal', $journalEntry->source);
         $this->assertSame($invoice->id, $journalEntry->invoice_id);
         $this->assertSame(3, $journalEntry->lines->count());
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.proposal.export-csv', [$company, $invoice]))
+            ->assertOk()
+            ->assertDownload('ecriture-facture-'.$invoice->id.'.csv');
+        $this->assertSame('accounting_exported', $invoice->fresh()->status);
+        $this->assertSame($manager->id, $invoice->fresh()->accounting_exported_by);
+        $this->assertNotNull($invoice->fresh()->accounting_exported_at);
 
         Http::assertSent(function (ClientRequest $request) use ($ocrText): bool {
             $data = $request->data();
@@ -169,10 +178,14 @@ class OpenRouterInvoicePipelineTest extends TestCase
                 return false;
             }
 
-            $allowedCodes = $data['response_format']['json_schema']['schema']['properties']['lines']['items']['properties']['chart_account_code']['enum'] ?? [];
+            $proposalProperties = $data['response_format']['json_schema']['schema']['properties'] ?? [];
+            $allowedCodes = $proposalProperties['lines']['items']['properties']['chart_account_code']['enum'] ?? [];
+            $invoiceTypes = $proposalProperties['invoice_type']['enum'] ?? [];
             $context = $data['messages'][1]['content'] ?? '';
 
-            return ! in_array('999999', $allowedCodes, true)
+            return in_array('it_invoice', $invoiceTypes, true)
+                && ! in_array('999999', $allowedCodes, true)
+                && str_contains($context, 'Services informatiques')
                 && ! str_contains($context, 'Société Confidentielle')
                 && ! str_contains($context, 'Compte secret autre société');
         });
@@ -508,6 +521,37 @@ class OpenRouterInvoicePipelineTest extends TestCase
         $this->assertSame($firstRawResponse, $firstProposal->fresh()->raw_response);
     }
 
+    public function test_regenerating_a_draft_proposal_is_guarded_and_keeps_the_old_version_for_audit(): void
+    {
+        Storage::fake('local');
+        Queue::fake();
+        $company = Company::factory()->create();
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $viewer = $this->companyUser($company, User::COMPANY_ROLE_USER);
+        $context = $this->seedAccountingContext($company);
+        $invoice = $this->queuedInvoice($company, 'proposal_ready');
+        app(InvoiceDataPersistence::class)->store($invoice, app(InvoiceOcrSchema::class)->validate($this->validInvoiceData()));
+        $proposal = $this->createProposal($company, $invoice, $context);
+
+        $this->actingAs($viewer)
+            ->post(route('companies.invoices.proposal.regenerate', [$company, $invoice]))
+            ->assertForbidden();
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.proposal.regenerate', [$company, $invoice]))
+            ->assertRedirect();
+
+        $this->assertSame('accounting_analysis', $invoice->fresh()->status);
+        $this->assertSame('superseded', $proposal->fresh()->status);
+        Queue::assertPushed(AnalyzeAccountingProposal::class, fn (AnalyzeAccountingProposal $job): bool => $job->invoiceId === $invoice->id && $job->companyId === $company->id);
+
+        $this->actingAs($manager)
+            ->from('/invoices')
+            ->post(route('companies.invoices.proposal.regenerate', [$company, $invoice]))
+            ->assertSessionHasErrors('proposal');
+        Queue::assertPushed(AnalyzeAccountingProposal::class, 1);
+    }
+
     public function test_viewing_or_editing_an_invoice_through_another_company_is_not_allowed(): void
     {
         Storage::fake('local');
@@ -587,17 +631,122 @@ class OpenRouterInvoicePipelineTest extends TestCase
         $this->actingAs($manager)
             ->from('/invoices')
             ->put(route('companies.invoices.proposal.update', [$company, $invoice]), [
+                'invoice_type' => 'professional_fees',
                 'journal_id' => $context['journal']->id,
                 'entry_description' => 'Facture de service',
                 'lines' => $this->proposalLines($context),
             ])
             ->assertRedirect('/invoices');
+        $this->assertSame('professional_fees', $proposal->fresh()->invoice_type);
 
         $this->actingAs($manager)
             ->post(route('companies.invoices.proposal.approve', [$company, $invoice]))
             ->assertRedirect();
         $this->assertSame('accounting_validated', $invoice->fresh()->status);
         $this->assertSame(1, $invoice->journalEntry()->count());
+    }
+
+    public function test_csv_export_can_download_a_draft_without_marking_it_validated_or_exported(): void
+    {
+        Storage::fake('local');
+        $company = Company::factory()->create();
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $context = $this->seedAccountingContext($company);
+        $invoice = $this->queuedInvoice($company, 'proposal_ready');
+        app(InvoiceDataPersistence::class)->store($invoice, app(InvoiceOcrSchema::class)->validate($this->validInvoiceData()));
+        $this->createProposal($company, $invoice, $context);
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.proposal.export-csv', [$company, $invoice]))
+            ->assertOk()
+            ->assertDownload('ecriture-facture-'.$invoice->id.'.csv');
+
+        $this->assertSame('proposal_ready', $invoice->fresh()->status);
+        $this->assertNull($invoice->fresh()->accounting_exported_at);
+        $this->assertNull($invoice->fresh()->accounting_exported_by);
+        $this->assertDatabaseCount('journal_entries', 0);
+    }
+
+    public function test_inconsistent_invoice_totals_block_journal_validation_server_side(): void
+    {
+        Storage::fake('local');
+        $company = Company::factory()->create();
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $context = $this->seedAccountingContext($company);
+        $invoice = $this->queuedInvoice($company, 'proposal_ready');
+        $invoiceData = $this->validInvoiceData();
+        $invoiceData['total_amount'] = '120.000';
+        $invoiceData['net_to_pay_amount'] = '120.000';
+        app(InvoiceDataPersistence::class)->store($invoice, app(InvoiceOcrSchema::class)->validate($invoiceData));
+        $this->createProposal($company, $invoice, $context);
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.proposal.approve', [$company, $invoice]))
+            ->assertSessionHasErrors('proposal');
+
+        $this->assertSame('proposal_ready', $invoice->fresh()->status);
+        $this->assertDatabaseCount('journal_entries', 0);
+    }
+
+    public function test_accounting_approval_requires_a_persisted_invoice_type(): void
+    {
+        Storage::fake('local');
+        $company = Company::factory()->create();
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $context = $this->seedAccountingContext($company);
+        $invoice = $this->queuedInvoice($company, 'proposal_ready');
+        app(InvoiceDataPersistence::class)->store($invoice, app(InvoiceOcrSchema::class)->validate($this->validInvoiceData()));
+        $proposal = $this->createProposal($company, $invoice, $context);
+        $proposal->forceFill(['invoice_type' => null])->save();
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.proposal.approve', [$company, $invoice]))
+            ->assertSessionHasErrors('proposal');
+
+        $this->assertSame('proposal_ready', $invoice->fresh()->status);
+        $this->assertDatabaseCount('journal_entries', 0);
+    }
+
+    public function test_withholding_is_deducted_from_net_pay_not_added_to_gross_debit_total(): void
+    {
+        Storage::fake('local');
+        $company = Company::factory()->create();
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $context = $this->seedAccountingContext($company);
+        $invoice = $this->queuedInvoice($company, 'proposal_ready');
+        $invoiceData = $this->validInvoiceData();
+        $invoiceData['withholding_amount'] = '10.000';
+        $invoiceData['net_to_pay_amount'] = '109.000';
+        app(InvoiceDataPersistence::class)->store($invoice, app(InvoiceOcrSchema::class)->validate($invoiceData));
+        $this->createProposal($company, $invoice, $context);
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.proposal.approve', [$company, $invoice]))
+            ->assertRedirect();
+
+        $this->assertSame('accounting_validated', $invoice->fresh()->status);
+        $this->assertSame('119.000', $invoice->fresh()->total_amount);
+        $this->assertSame(1, $invoice->journalEntry()->count());
+    }
+
+    public function test_currency_mismatch_blocks_journal_validation_when_no_conversion_rate_is_configured(): void
+    {
+        Storage::fake('local');
+        $company = Company::factory()->create(['currency' => 'TND']);
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $context = $this->seedAccountingContext($company);
+        $invoice = $this->queuedInvoice($company, 'proposal_ready');
+        $invoiceData = $this->validInvoiceData();
+        $invoiceData['currency'] = 'EUR';
+        app(InvoiceDataPersistence::class)->store($invoice, app(InvoiceOcrSchema::class)->validate($invoiceData));
+        $this->createProposal($company, $invoice, $context);
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.proposal.approve', [$company, $invoice]))
+            ->assertSessionHasErrors('proposal');
+
+        $this->assertSame('proposal_ready', $invoice->fresh()->status);
+        $this->assertDatabaseCount('journal_entries', 0);
     }
 
     public function test_retry_targets_the_failed_ai_stage_without_repeating_ocr(): void
@@ -758,6 +907,7 @@ class OpenRouterInvoicePipelineTest extends TestCase
     private function validProposal(): array
     {
         return [
+            'invoice_type' => 'it_invoice',
             'journal_code' => 'ACH',
             'entry_description' => 'Achat prestation FAC-2026-001',
             'explanation' => 'La prestation est imputée en charge, la TVA est isolée, et le fournisseur est crédité du TTC.',
@@ -807,6 +957,7 @@ class OpenRouterInvoicePipelineTest extends TestCase
         $proposal = $company->accountingProposals()->create([
             'invoice_id' => $invoice->id,
             'journal_id' => $context['journal']->id,
+            'invoice_type' => 'it_invoice',
             'status' => 'ready',
             'model' => 'qwen/test-free-model',
             'entry_description' => 'Achat prestation FAC-2026-001',

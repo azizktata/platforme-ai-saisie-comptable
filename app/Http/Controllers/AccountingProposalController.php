@@ -2,7 +2,9 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\InvoiceType;
 use App\Http\Requests\SaveAccountingProposalRequest;
+use App\Jobs\AnalyzeAccountingProposal;
 use App\Models\AccountingProposal;
 use App\Models\Company;
 use App\Models\Invoice;
@@ -10,10 +12,13 @@ use App\Models\JournalEntry;
 use App\Models\User;
 use App\Services\Invoices\AccountingProposalBalanceChecker;
 use App\Services\Invoices\InvoiceDataCompletenessChecker;
+use App\Services\Ocr\InvoiceTotalsConsistencyChecker;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AccountingProposalController extends Controller
 {
@@ -62,6 +67,7 @@ class AccountingProposalController extends Controller
 
             $proposal->forceFill([
                 'journal_id' => (int) $data['journal_id'],
+                'invoice_type' => $data['invoice_type'] ?? $proposal->invoice_type,
                 'entry_description' => trim($data['entry_description']),
                 'modified_by' => $modifier->id,
                 'modified_at' => now(),
@@ -89,12 +95,90 @@ class AccountingProposalController extends Controller
         return back()->with('success', 'La proposition comptable a été mise à jour. Vérifiez les avertissements avant validation.');
     }
 
+    public function regenerate(
+        Company $company,
+        Invoice $invoice,
+        InvoiceDataCompletenessChecker $completenessChecker,
+    ): RedirectResponse {
+        $this->authorize('manageInvoices', $company);
+        abort_unless((int) $invoice->company_id === (int) $company->id, 404);
+
+        DB::transaction(function () use ($company, $invoice, $completenessChecker): void {
+            $lockedInvoice = $company->invoices()->whereKey($invoice->id)->lockForUpdate()->firstOrFail();
+
+            if (! in_array($lockedInvoice->status, ['proposal_ready', 'proposal_rejected', 'accounting_analysis_failed'], true)
+                || $lockedInvoice->journalEntry()->exists()) {
+                throw ValidationException::withMessages([
+                    'proposal' => 'La proposition ne peut pas être régénérée à cette étape ou une écriture existe déjà.',
+                ]);
+            }
+
+            if ($completenessChecker->missingFields($lockedInvoice->ocr_data ?? []) !== []) {
+                throw ValidationException::withMessages([
+                    'proposal' => 'Complétez les informations obligatoires de la facture avant de régénérer la proposition.',
+                ]);
+            }
+
+            $proposal = AccountingProposal::query()
+                ->where('company_id', $company->id)
+                ->where('invoice_id', $lockedInvoice->id)
+                ->orderByDesc('id')
+                ->lockForUpdate()
+                ->first();
+
+            if ($lockedInvoice->status === 'proposal_ready' && ($proposal === null || $proposal->status !== 'ready' || $proposal->journal_entry_id !== null)) {
+                throw ValidationException::withMessages([
+                    'proposal' => 'La proposition n’est plus disponible pour régénération.',
+                ]);
+            }
+
+            if ($lockedInvoice->status === 'proposal_rejected' && ($proposal === null || $proposal->status !== 'rejected')) {
+                throw ValidationException::withMessages([
+                    'proposal' => 'La proposition rejetée n’est plus disponible pour régénération.',
+                ]);
+            }
+
+            if ($proposal?->status === 'ready') {
+                $proposal->forceFill(['status' => 'superseded'])->save();
+            }
+
+            $lockedInvoice->forceFill([
+                'status' => 'accounting_analysis',
+                'ocr_failed_at' => null,
+                'ocr_error_code' => null,
+                'ocr_error_message' => null,
+            ])->save();
+        });
+
+        try {
+            AnalyzeAccountingProposal::dispatch($invoice->id, $company->id);
+        } catch (\Throwable) {
+            DB::transaction(function () use ($company, $invoice): void {
+                $lockedInvoice = $company->invoices()->whereKey($invoice->id)->lockForUpdate()->first();
+
+                if ($lockedInvoice?->status === 'accounting_analysis') {
+                    $lockedInvoice->forceFill([
+                        'status' => 'accounting_analysis_failed',
+                        'ocr_failed_at' => now(),
+                        'ocr_error_code' => 'queue_unavailable',
+                        'ocr_error_message' => 'La proposition IA n’a pas pu être planifiée. Vous pouvez réessayer.',
+                    ])->save();
+                }
+            });
+
+            return back()->withErrors(['proposal' => 'La proposition IA n’a pas pu être planifiée. Vous pouvez réessayer.']);
+        }
+
+        return back()->with('success', 'La régénération de la proposition IA a démarré. La version précédente reste conservée pour audit.');
+    }
+
     public function approve(
         Request $request,
         Company $company,
         Invoice $invoice,
         AccountingProposalBalanceChecker $balanceChecker,
         InvoiceDataCompletenessChecker $completenessChecker,
+        InvoiceTotalsConsistencyChecker $totalsChecker,
     ): RedirectResponse {
         $this->authorize('manageInvoices', $company);
         abort_unless((int) $invoice->company_id === (int) $company->id, 404);
@@ -102,7 +186,7 @@ class AccountingProposalController extends Controller
         /** @var User $reviewer */
         $reviewer = $request->user();
 
-        DB::transaction(function () use ($company, $invoice, $reviewer, $balanceChecker, $completenessChecker): void {
+        DB::transaction(function () use ($company, $invoice, $reviewer, $balanceChecker, $completenessChecker, $totalsChecker): void {
             $lockedInvoice = $company->invoices()->whereKey($invoice->id)->lockForUpdate()->firstOrFail();
             $proposal = AccountingProposal::query()
                 ->where('company_id', $company->id)
@@ -120,9 +204,32 @@ class AccountingProposalController extends Controller
                 ]);
             }
 
+            if (! is_string($proposal->invoice_type) || InvoiceType::tryFrom($proposal->invoice_type) === null) {
+                throw ValidationException::withMessages([
+                    'proposal' => 'Choisissez le type de facture avant de valider l’écriture.',
+                ]);
+            }
+
             if ($completenessChecker->missingFields($lockedInvoice->ocr_data ?? []) !== []) {
                 throw ValidationException::withMessages([
                     'proposal' => 'Complétez les informations obligatoires de la facture avant de valider la proposition.',
+                ]);
+            }
+
+            $invoiceTotalWarnings = $totalsChecker->warnings($lockedInvoice->ocr_data ?? []);
+
+            if ($totalsChecker->hasBlockingWarnings($invoiceTotalWarnings)) {
+                throw ValidationException::withMessages([
+                    'proposal' => 'Les totaux extraits de la facture ne sont pas cohérents. Corrigez les montants avant validation.',
+                ]);
+            }
+
+            $invoiceCurrency = strtoupper((string) $lockedInvoice->currency);
+            $companyCurrency = strtoupper((string) ($company->currency ?: 'TND'));
+
+            if ($invoiceCurrency !== $companyCurrency) {
+                throw ValidationException::withMessages([
+                    'proposal' => "La facture est en {$invoiceCurrency} alors que la société comptabilise en {$companyCurrency}. Aucun taux de conversion n’est configuré ; la validation comptable est bloquée.",
                 ]);
             }
 
@@ -189,6 +296,122 @@ class AccountingProposalController extends Controller
         return back()->with('success', 'La proposition a été validée et l’écriture comptable a été créée.');
     }
 
+    public function exportCsv(Request $request, Company $company, Invoice $invoice): StreamedResponse|JsonResponse
+    {
+        $this->authorize('manageInvoices', $company);
+        abort_unless((int) $invoice->company_id === (int) $company->id, 404);
+
+        /** @var User $exporter */
+        $exporter = $request->user();
+
+        $export = DB::transaction(function () use ($company, $invoice, $exporter): ?array {
+            $lockedInvoice = $company->invoices()->whereKey($invoice->id)->lockForUpdate()->firstOrFail();
+            $headers = [
+                'Journal', 'Date', 'Référence', 'Libellé écriture', 'Compte', 'Intitulé compte',
+                'Tiers', 'Code analytique', 'Libellé ligne', 'Débit', 'Crédit', 'Devise',
+            ];
+            $rows = [];
+
+            if (in_array($lockedInvoice->status, ['accounting_validated', 'accounting_exported'], true)) {
+                $entry = JournalEntry::query()
+                    ->where('company_id', $company->id)
+                    ->where('invoice_id', $lockedInvoice->id)
+                    ->with(['journal', 'lines.chartAccount', 'lines.thirdParty', 'lines.analyticalAccount'])
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($entry === null) {
+                    return null;
+                }
+
+                foreach ($entry->lines as $line) {
+                    $rows[] = [
+                        $this->safeCsvText($entry->journal?->code),
+                        $entry->entry_date?->toDateString() ?? '',
+                        $this->safeCsvText($entry->reference),
+                        $this->safeCsvText($entry->description),
+                        $this->safeCsvText($line->chartAccount?->code),
+                        $this->safeCsvText($line->chartAccount?->label),
+                        $this->safeCsvText($line->thirdParty?->code),
+                        $this->safeCsvText($line->analyticalAccount?->code),
+                        $this->safeCsvText($line->description),
+                        (string) $line->debit,
+                        (string) $line->credit,
+                        $this->safeCsvText($lockedInvoice->currency),
+                    ];
+                }
+
+                $lockedInvoice->forceFill([
+                    'status' => 'accounting_exported',
+                    'accounting_exported_at' => now(),
+                    'accounting_exported_by' => $exporter->id,
+                ])->save();
+            } elseif ($lockedInvoice->status === 'proposal_ready') {
+                $proposal = AccountingProposal::query()
+                    ->where('company_id', $company->id)
+                    ->where('invoice_id', $lockedInvoice->id)
+                    ->where('status', 'ready')
+                    ->with(['journal', 'lines.chartAccount', 'lines.thirdParty', 'lines.analyticalAccount'])
+                    ->orderByDesc('id')
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($proposal === null || $proposal->journal_entry_id !== null) {
+                    return null;
+                }
+
+                $reference = $lockedInvoice->invoice_number ?: 'FACTURE-'.$lockedInvoice->id;
+                $entryDate = $lockedInvoice->invoice_date?->toDateString() ?? '';
+
+                foreach ($proposal->lines as $line) {
+                    $rows[] = [
+                        $this->safeCsvText($proposal->journal?->code),
+                        $entryDate,
+                        $this->safeCsvText($reference),
+                        $this->safeCsvText($proposal->entry_description),
+                        $this->safeCsvText($line->chartAccount?->code),
+                        $this->safeCsvText($line->chartAccount?->label),
+                        $this->safeCsvText($line->thirdParty?->code),
+                        $this->safeCsvText($line->analyticalAccount?->code),
+                        $this->safeCsvText($line->description),
+                        (string) $line->debit,
+                        (string) $line->credit,
+                        $this->safeCsvText($lockedInvoice->currency),
+                    ];
+                }
+            } else {
+                return null;
+            }
+
+            if ($rows === []) {
+                return null;
+            }
+
+            return [
+                'csv' => $this->buildCsv($headers, $rows),
+                'filename' => 'ecriture-facture-'.$lockedInvoice->id.'.csv',
+            ];
+        });
+
+        if ($export === null) {
+            return response()->json([
+                'message' => 'Aucune proposition prête ou écriture validée n’est disponible pour l’export CSV.',
+            ], 422);
+        }
+
+        return response()->streamDownload(
+            static function () use ($export): void {
+                echo $export['csv'];
+            },
+            $export['filename'],
+            [
+                'Content-Type' => 'text/csv; charset=UTF-8',
+                'Cache-Control' => 'private, no-store',
+                'X-Content-Type-Options' => 'nosniff',
+            ],
+        );
+    }
+
     public function reject(Request $request, Company $company, Invoice $invoice): RedirectResponse
     {
         $this->authorize('manageInvoices', $company);
@@ -228,6 +451,38 @@ class AccountingProposalController extends Controller
         });
 
         return back()->with('success', 'La proposition comptable a été rejetée. Aucune écriture n’a été créée.');
+    }
+
+    /** @param list<string> $headers
+     *  @param list<list<string>> $rows
+     */
+    private function buildCsv(array $headers, array $rows): string
+    {
+        $stream = fopen('php://temp', 'r+');
+
+        if ($stream === false) {
+            throw new \RuntimeException('Unable to create the CSV export stream.');
+        }
+
+        fwrite($stream, "\xEF\xBB\xBF");
+        fputcsv($stream, $headers, ';', '"', '\\');
+
+        foreach ($rows as $row) {
+            fputcsv($stream, $row, ';', '"', '\\');
+        }
+
+        rewind($stream);
+        $csv = stream_get_contents($stream);
+        fclose($stream);
+
+        return is_string($csv) ? $csv : '';
+    }
+
+    private function safeCsvText(?string $value): string
+    {
+        $value ??= '';
+
+        return preg_match('/^[\s]*[=+\-@]/u', $value) === 1 ? "'".$value : $value;
     }
 
     /** @param array<string, mixed> $data */
