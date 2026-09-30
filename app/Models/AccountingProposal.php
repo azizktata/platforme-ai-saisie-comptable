@@ -15,6 +15,7 @@ class AccountingProposal extends Model
         'company_id',
         'invoice_id',
         'journal_id',
+        'invoice_type',
         'journal_entry_id',
         'reviewed_by',
         'modified_by',

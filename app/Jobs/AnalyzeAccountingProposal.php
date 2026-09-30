@@ -108,6 +108,7 @@ class AnalyzeAccountingProposal implements ShouldQueue, ShouldBeUnique
                 'company_id' => $invoice->company_id,
                 'invoice_id' => $invoice->id,
                 'journal_id' => $proposalData['journal_id'],
+                'invoice_type' => $proposalData['invoice_type'],
                 'status' => 'ready',
                 'model' => $proposalData['model'],
                 'entry_description' => $proposalData['entry_description'],

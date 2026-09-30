@@ -24,17 +24,18 @@ Transformer une facture fournisseur en proposition comptable vérifiable, contex
 2. OCR.space Engine 3 Free transcrit la facture par défaut ; Mistral demeure configurable. Le texte OCR et la réponse brute sont consultables/audités.
 3. `qwen/qwen-2.5-7b-instruct:free` via OpenRouter structure la transcription OCR.space avec le JSON Schema strict, JSON uniquement et 2 500 tokens par défaut. Laravel valide/normalise ; les réponses mal formées ou safety-classifier sont refusées. L’extraction est configurable séparément et n’effectue aucun calcul. Les champs incomplets sont visibles et corrigibles ; ils bloquent l’analyse comptable. Le chemin Mistral conserve sa structure directe.
 4. Une fois complète, une seconde requête OpenRouter analyse la facture en utilisant uniquement les référentiels actifs, le profil et l’historique récent de la société.
-5. Les données et la proposition sont affichées sur une page de revue dédiée, avec le document PDF/image dans un visualiseur indépendant, les avertissements et contrôles. Un gestionnaire peut corriger ou rejeter. Les corrections sont auditées et chaque nouvelle analyse conserve la version précédente. La relance d’extraction réutilise le texte OCR stocké et ne relance pas OCR.
-6. Seule la validation humaine explicite crée une écriture comptable liée à la facture. L’export Sage réel est différé jusqu’à inspection du format `.mae` et de la version Sage.
+5. Les données et la proposition sont affichées sur une page de revue dédiée, avec le document PDF/image dans un visualiseur indépendant, les avertissements et contrôles. L’espace de revue à droite présente la confiance réellement fournie (les sous-scores absents sont N/D) et cinq cartes : données extraites modifiables, type de facture contextualisé par l’activité, proposition brouillon éditable, contrôles verticaux et décision humaine.
+6. Le gestionnaire peut corriger les montants, choisir le type, modifier la proposition, régénérer un brouillon éligible, rejeter ou valider. Les corrections et versions sont auditées. Un bouton distinct recalcule localement les totaux de manière déterministe (HT + taxes + timbre = TTC brut ; retenue déduite seulement du net), sans appel LLM et sans application automatique. Les champs vides exigent confirmation avant d’être assimilés à zéro.
+7. La relance d’extraction réutilise le texte OCR stocké et ne relance pas OCR. Seule la validation humaine explicite crée une écriture comptable liée à la facture. L’export Sage réel est différé jusqu’à inspection du format `.mae` et de la version Sage.
 
 ## Règles produit
 
 - Import PDF/JPG/JPEG/PNG en lot ; un fichier échoué ne bloque pas les autres.
 - Un fournisseur non apparié reste possible (`invoices.third_party_id` nullable) ; aucun tiers ou compte n’est créé automatiquement.
 - Les comptes/codes sont des chaînes ; l’IA ne peut sélectionner que les référentiels actifs de la société liée.
-- Les montants sont stockés à trois décimales et vérifiés au millime, sans correction automatique. Les erreurs/incohérences restent visibles.
+- Les montants sont stockés à trois décimales et vérifiés au millime, sans correction automatique. Seul un bouton explicite effectue un calcul local déterministe à partir des champs saisis ; les erreurs/incohérences restent visibles et aucune somme n’est déléguée au LLM.
 - OCR brut, transcription, réponses de structuration et de proposition sont conservés séparément ; les secrets et prompts ne sont pas écrits dans les logs.
-- Une validation de proposition revérifie l’équilibre, le total, les champs requis, l’état des références et le tenant, et ne peut créer qu’une écriture liée par facture.
+- Une validation de proposition revérifie la catégorie, les totaux HT/TVA/TTC brut/net, l’équilibre, les champs requis, l’état des références, la devise et le tenant ; la retenue ne majore pas le TTC. Une seule écriture liée peut être créée par facture.
 - La mémoire des corrections, l’import/export Sage réel et les règles exhaustives de fiscalité/avoirs restent différés.
 
 ## Statut des fonctionnalités

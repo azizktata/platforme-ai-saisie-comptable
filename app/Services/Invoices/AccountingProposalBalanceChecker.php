@@ -39,10 +39,6 @@ class AccountingProposalBalanceChecker
         if (is_string($invoice->total_amount) && trim($invoice->total_amount) !== '') {
             $expected = $this->toMilli($invoice->total_amount);
 
-            if (is_string($invoice->withholding_amount) && trim($invoice->withholding_amount) !== '') {
-                $expected += $this->toMilli($invoice->withholding_amount);
-            }
-
             if ($debit > 0 && $debit !== $expected) {
                 $warnings[] = 'proposal_invoice_total_mismatch';
             }

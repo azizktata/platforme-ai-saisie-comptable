@@ -38,6 +38,8 @@ Route::middleware('auth')->group(function (): void {
         ->name('companies.invoices.index');
     Route::post('/companies/{company}/invoices/upload', [InvoiceController::class, 'upload'])
         ->name('companies.invoices.upload');
+    Route::post('/companies/{company}/invoices/analyze-all', [InvoiceController::class, 'analyzeAll'])
+        ->name('companies.invoices.analyze-all');
     Route::get('/companies/{company}/invoices/{invoice}', [InvoiceController::class, 'show'])
         ->name('companies.invoices.show');
     Route::get('/companies/{company}/invoices/{invoice}/preview', [InvoiceController::class, 'preview'])
@@ -50,8 +52,12 @@ Route::middleware('auth')->group(function (): void {
         ->name('companies.invoices.extraction.update');
     Route::put('/companies/{company}/invoices/{invoice}/proposal', [AccountingProposalController::class, 'update'])
         ->name('companies.invoices.proposal.update');
+    Route::post('/companies/{company}/invoices/{invoice}/proposal/regenerate', [AccountingProposalController::class, 'regenerate'])
+        ->name('companies.invoices.proposal.regenerate');
     Route::post('/companies/{company}/invoices/{invoice}/proposal/approve', [AccountingProposalController::class, 'approve'])
         ->name('companies.invoices.proposal.approve');
+    Route::post('/companies/{company}/invoices/{invoice}/proposal/export-csv', [AccountingProposalController::class, 'exportCsv'])
+        ->name('companies.invoices.proposal.export-csv');
     Route::post('/companies/{company}/invoices/{invoice}/proposal/reject', [AccountingProposalController::class, 'reject'])
         ->name('companies.invoices.proposal.reject');
     Route::post('/companies/{company}/invoices/{invoice}/ocr/retry', [InvoiceController::class, 'retryOcr'])

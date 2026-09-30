@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\AnalyzeAccountingProposal;
+use App\Jobs\ExtractInvoiceData;
 use App\Jobs\ProcessInvoiceOcr;
 use App\Models\Cabinet;
 use App\Models\Company;
@@ -48,7 +50,12 @@ class InvoiceIntakeTest extends TestCase
             ->assertJsonPath('invoice.ocr_data.customer_name', null)
             ->assertJsonPath('invoice.ocr_data.total_discount_amount', null)
             ->assertJsonPath('invoice.ocr_data.lines.0.description', 'Prestation historique')
-            ->assertJsonPath('invoice.ocr_data.lines.0.discount_amount', null);
+            ->assertJsonPath('invoice.ocr_data.lines.0.discount_amount', null)
+            ->assertJsonPath('checks.fiscal_year.status', 'unavailable')
+            ->assertJsonPath('checks.invoice_number.status', 'unavailable')
+            ->assertJsonPath('checks.supplier.status', 'pending')
+            ->assertJsonPath('checks.duplicate.status', 'passed')
+            ->assertJsonPath('company_profile.activity', $company->activity);
     }
 
     public function test_invoice_manager_can_upload_view_and_download_a_private_company_document(): void
@@ -332,6 +339,24 @@ class InvoiceIntakeTest extends TestCase
                 ->where('invoices.total', 1));
     }
 
+    public function test_invoice_workspace_stats_distinguish_validated_from_csv_exported(): void
+    {
+        $company = Company::factory()->create();
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $this->createInvoice($company, 'to-analyze.pdf', 'uploaded');
+        $this->createInvoice($company, 'validated.pdf', 'accounting_validated');
+        $this->createInvoice($company, 'exported.pdf', 'accounting_exported');
+
+        $this->actingAs($manager)
+            ->get(route('invoices.index', ['company_id' => $company->id]))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('invoiceStats.total', 3)
+                ->where('invoiceStats.to_analyze', 1)
+                ->where('invoiceStats.validated', 1)
+                ->where('invoiceStats.exported', 1));
+    }
+
     public function test_global_invoice_workspace_only_offers_and_serves_companies_the_user_can_access(): void
     {
         $cabinet = Cabinet::factory()->create();
@@ -362,6 +387,54 @@ class InvoiceIntakeTest extends TestCase
         $this->actingAs($user)
             ->get(route('invoices.index', ['company_id' => $foreignCompany->id]))
             ->assertNotFound();
+    }
+
+    public function test_accounting_csv_export_cannot_cross_company_boundaries(): void
+    {
+        $company = Company::factory()->create();
+        $otherCompany = Company::factory()->create();
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $foreignInvoice = $this->createInvoice($otherCompany, 'foreign.csv-source.pdf', 'proposal_ready');
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.proposal.export-csv', [$company, $foreignInvoice]))
+            ->assertNotFound();
+    }
+
+    public function test_analyze_all_queues_only_failed_or_unstarted_stages_for_the_selected_company(): void
+    {
+        Queue::fake();
+
+        $company = Company::factory()->create();
+        $otherCompany = Company::factory()->create();
+        $manager = $this->companyUser($company, User::COMPANY_ROLE_INVOICE_MANAGER);
+        $reader = $this->companyUser($company, User::COMPANY_ROLE_USER);
+        $uploaded = $this->createInvoice($company, 'uploaded.pdf', 'uploaded');
+        $ocrFailed = $this->createInvoice($company, 'ocr-failed.pdf', 'ocr_failed');
+        $extractionFailed = $this->createInvoice($company, 'extraction-failed.pdf', 'data_extraction_failed');
+        $extractionFailed->forceFill(['ocr_text' => 'Texte OCR existant'])->save();
+        $analysisFailed = $this->createInvoice($company, 'analysis-failed.pdf', 'accounting_analysis_failed');
+        $notEligible = $this->createInvoice($company, 'ready.pdf', 'proposal_ready');
+        $foreignFailed = $this->createInvoice($otherCompany, 'foreign.pdf', 'ocr_failed');
+
+        $this->actingAs($reader)
+            ->post(route('companies.invoices.analyze-all', $company))
+            ->assertForbidden();
+
+        $this->actingAs($manager)
+            ->post(route('companies.invoices.analyze-all', $company))
+            ->assertRedirect()
+            ->assertSessionHas('success');
+
+        $this->assertSame('ocr_queued', $uploaded->fresh()->status);
+        $this->assertSame('ocr_queued', $ocrFailed->fresh()->status);
+        $this->assertSame('data_extraction', $extractionFailed->fresh()->status);
+        $this->assertSame('accounting_analysis', $analysisFailed->fresh()->status);
+        $this->assertSame('proposal_ready', $notEligible->fresh()->status);
+        $this->assertSame('ocr_failed', $foreignFailed->fresh()->status);
+        Queue::assertPushed(ProcessInvoiceOcr::class, 2);
+        Queue::assertPushed(ExtractInvoiceData::class, 1);
+        Queue::assertPushed(AnalyzeAccountingProposal::class, 1);
     }
 
     public function test_invoice_manager_can_bulk_mark_only_completed_company_extractions_as_reviewed(): void

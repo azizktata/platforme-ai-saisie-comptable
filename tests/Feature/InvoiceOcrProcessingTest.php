@@ -113,6 +113,45 @@ class InvoiceOcrProcessingTest extends TestCase
         $this->assertSame(['invoice_total_mismatch'], $invoice->ocr_warnings);
     }
 
+    public function test_gross_ttc_is_checked_before_withholding_and_net_to_pay_is_checked_separately(): void
+    {
+        $invoiceData = $this->validAnnotation();
+        $invoiceData['withholding_amount'] = '10.000';
+        $invoiceData['total_amount'] = '119.000';
+        $invoiceData['net_to_pay_amount'] = '109.000';
+
+        $checker = app(InvoiceTotalsConsistencyChecker::class);
+        $this->assertSame([], $checker->warnings($invoiceData));
+
+        $invoiceData['net_to_pay_amount'] = '108.999';
+        $this->assertSame(['invoice_net_to_pay_mismatch'], $checker->warnings($invoiceData));
+
+        $invoiceData['net_to_pay_amount'] = '109.000';
+        $invoiceData['total_amount'] = '109.000';
+        $this->assertContains('invoice_total_mismatch', $checker->warnings($invoiceData));
+    }
+
+    public function test_missing_withholding_does_not_make_gross_ttc_check_inconclusive(): void
+    {
+        $invoiceData = $this->validAnnotation();
+        $invoiceData['withholding_amount'] = null;
+        $invoiceData['net_to_pay_amount'] = null;
+
+        $this->assertSame([], app(InvoiceTotalsConsistencyChecker::class)->warnings($invoiceData));
+    }
+
+    public function test_vat_rate_is_checked_deterministically_when_a_global_rate_is_available(): void
+    {
+        $invoiceData = $this->validAnnotation();
+        $invoiceData['vat_amount'] = '18.000';
+        $invoiceData['total_amount'] = '118.000';
+
+        $this->assertSame(
+            ['invoice_vat_mismatch'],
+            app(InvoiceTotalsConsistencyChecker::class)->warnings($invoiceData),
+        );
+    }
+
     public function test_missing_tax_components_make_total_check_inconclusive_instead_of_assuming_zero(): void
     {
         Storage::fake('local');
