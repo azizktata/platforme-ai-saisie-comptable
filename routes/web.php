@@ -56,6 +56,8 @@ Route::middleware('auth')->group(function (): void {
         ->name('companies.invoices.proposal.update');
     Route::post('/companies/{company}/invoices/{invoice}/proposal/regenerate', [AccountingProposalController::class, 'regenerate'])
         ->name('companies.invoices.proposal.regenerate');
+    Route::post('/companies/{company}/invoices/{invoice}/proposal/restore', [AccountingProposalController::class, 'restore'])
+        ->name('companies.invoices.proposal.restore');
     Route::post('/companies/{company}/invoices/{invoice}/proposal/approve', [AccountingProposalController::class, 'approve'])
         ->name('companies.invoices.proposal.approve');
     Route::post('/companies/{company}/invoices/{invoice}/proposal/export-csv', [AccountingProposalController::class, 'exportCsv'])

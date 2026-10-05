@@ -25,9 +25,9 @@ class AnalyzeAccountingProposal implements ShouldQueue, ShouldBeUnique
     use Queueable;
     use SerializesModels;
 
-    public int $tries = 4;
+    public int $tries = 2;
 
-    public int $timeout = 180;
+    public int $timeout = 210;
 
     public bool $failOnTimeout = true;
 

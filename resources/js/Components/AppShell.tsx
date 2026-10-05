@@ -21,7 +21,7 @@ type Props = {
 };
 
 const baseNavigation: NavigationItem[] = [
-  { label: 'Vue d’ensemble', href: '/', section: 'overview', icon: LayoutDashboard },
+  { label: 'Tableau de bord', href: '/', section: 'overview', icon: LayoutDashboard },
   { label: 'Sociétés', href: '/companies', section: 'companies', icon: Building2 },
   { label: 'Factures', href: '/invoices', section: 'invoices', icon: FileText },
   { label: 'Données comptables', href: '/accounting-data', section: 'accounting', icon: BookOpenText },
@@ -50,7 +50,7 @@ export default function AppShell({
     ] : []),
   ];
   const sectionLabels: Record<Section, string> = {
-    overview: 'Vue d’ensemble',
+    overview: 'Tableau de bord',
     companies: 'Sociétés',
     accounting: 'Données comptables',
     invoices: 'Factures',

@@ -27,9 +27,9 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
     use Queueable;
     use SerializesModels;
 
-    public int $tries = 3;
+    public int $tries = 2;
 
-    public int $timeout = 210;
+    public int $timeout = 180;
 
     public bool $failOnTimeout = true;
 

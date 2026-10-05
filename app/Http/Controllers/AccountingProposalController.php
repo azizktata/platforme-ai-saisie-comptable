@@ -299,6 +299,47 @@ class AccountingProposalController extends Controller
         return back()->with('success', 'La proposition a été validée et l’écriture comptable a été créée.');
     }
 
+    public function restore(
+        Request $request,
+        Company $company,
+        Invoice $invoice,
+        AccountingProposalBalanceChecker $balanceChecker,
+        InvoiceDataCompletenessChecker $completenessChecker,
+        InvoiceTotalsConsistencyChecker $totalsChecker,
+    ): RedirectResponse {
+        $this->authorize('manageInvoices', $company);
+        abort_unless((int) $invoice->company_id === (int) $company->id, 404);
+
+        DB::transaction(function () use ($company, $invoice, $balanceChecker, $completenessChecker, $totalsChecker): void {
+            $lockedInvoice = $company->invoices()->whereKey($invoice->id)->lockForUpdate()->firstOrFail();
+            $proposal = $company->accountingProposals()
+                ->where('invoice_id', $lockedInvoice->id)
+                ->orderByDesc('id')
+                ->with('lines')
+                ->lockForUpdate()
+                ->first();
+
+            if ($proposal === null || $proposal->status !== 'superseded'
+                || $proposal->journal_entry_id !== null || $lockedInvoice->journalEntry()->exists()) {
+                throw ValidationException::withMessages(['proposal' => 'Aucune ancienne proposition ne peut être réactivée pour cette facture.']);
+            }
+
+            if ($completenessChecker->missingFields($lockedInvoice->ocr_data ?? []) !== []) {
+                throw ValidationException::withMessages(['proposal' => 'Complétez les informations obligatoires de la facture avant de réactiver la proposition.']);
+            }
+
+            if ($totalsChecker->hasBlockingWarnings($totalsChecker->warnings($lockedInvoice->ocr_data ?? []))
+                || $balanceChecker->hasBlockingWarnings($balanceChecker->warnings($lockedInvoice, $proposal->lines))) {
+                throw ValidationException::withMessages(['proposal' => 'Les montants de la facture ou de la proposition ont changé. Générez une nouvelle proposition après les avoir corrigés.']);
+            }
+
+            $proposal->forceFill(['status' => 'ready'])->save();
+            $lockedInvoice->forceFill(['status' => 'proposal_ready'])->save();
+        });
+
+        return back()->with('success', 'La proposition précédente est de nouveau disponible pour vérification et validation.');
+    }
+
     public function exportCsv(Request $request, Company $company, Invoice $invoice): StreamedResponse|JsonResponse
     {
         $this->authorize('manageInvoices', $company);

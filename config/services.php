@@ -2,7 +2,7 @@
 
 return [
     'ocr' => [
-        'provider' => env('OCR_PROVIDER', 'ocr_space'),
+        'provider' => env('OCR_PROVIDER', 'ocr_space'), 
     ],
     'ocr_space' => [
         'api_key' => env('OCR_SPACE_API_KEY'),
@@ -21,7 +21,8 @@ return [
         'api_key' => env('OPENROUTER_API_KEY'),
         'endpoint' => env('OPENROUTER_ENDPOINT', 'https://openrouter.ai/api/v1/chat/completions'),
         'model' => env('OPENROUTER_MODEL', 'openrouter/free'),
-        'timeout' => (int) env('OPENROUTER_TIMEOUT', 120),
+        'ocr_model' => env('OPENROUTER_OCR_MODEL', 'qwen/qwen3.8-27b:free'), // or nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+        'timeout' => (int) env('OPENROUTER_TIMEOUT', 160),
         'site_url' => env('OPENROUTER_SITE_URL'),
         'app_name' => env('OPENROUTER_APP_NAME', env('APP_NAME', 'ComptaFlow')),
         'ca_bundle' => env('OPENROUTER_CA_BUNDLE'),

@@ -76,6 +76,7 @@ class OpenRouterClient
                 'response_format' => $responseFormat,
                 'temperature' => 0,
                 'max_tokens' => min(max(256, $maxTokens), 12000),
+                'require_parameters' => true,
             ];
 
             $response = Http::acceptJson()

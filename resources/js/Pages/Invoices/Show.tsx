@@ -138,9 +138,9 @@ function formatDate(date: string): string {
 function statusLabel(status: string): string {
   const labels: Record<string, string> = {
     uploaded: 'À analyser', ocr_queued: 'En analyse', ocr_processing: 'En analyse', data_extraction: 'Extraction',
-    invoice_incomplete: 'À compléter', accounting_analysis: 'Analyse comptable', proposal_ready: 'À vérifier',
-    accounting_validated: 'Validée', accounting_exported: 'Exportée', proposal_rejected: 'Rejetée',
-    ocr_completed: 'OCR terminé', ocr_failed: 'Échec OCR', data_extraction_failed: 'Échec extraction', accounting_analysis_failed: 'Échec analyse',
+    invoice_incomplete: 'À analyser', accounting_analysis: 'En analyse', proposal_ready: 'À valider',
+    accounting_validated: 'Validé', accounting_exported: 'Exporté', proposal_rejected: 'Rejeté',
+    ocr_completed: 'À analyser', ocr_failed: 'À analyser', data_extraction_failed: 'À analyser', accounting_analysis_failed: 'À analyser',
   };
   return labels[status] || status;
 }

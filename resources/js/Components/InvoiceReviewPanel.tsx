@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import ConfirmDialog from './ConfirmDialog';
 
 export type InvoiceLineData = {
   reference: string | null;
@@ -118,11 +119,10 @@ type InvoiceDetail = {
   ocr_warnings: string[];
   ocr_error_message: string | null;
   ocr_model: string | null;
-  extraction_provider: string;
-  extraction_model: string | null;
   extraction_corrected_at: string | null;
   accounting_exported_at: string | null;
 };
+type ProposalVersion = { id: number; status: string; journal_code: string | null; invoice_type: string | null; entry_description: string; explanation: string | null; warnings: string[]; created_at: string | null; modified_at: string | null; lines: { chart_account_code: string | null; chart_account_label: string | null; third_party_name: string | null; description: string | null; debit: string; credit: string }[] };
 
 type Options = {
   chart_accounts: { id: number; code: string; label: string; account_type: string }[];
@@ -152,6 +152,7 @@ type ConfidenceAssessment = {
 export type InvoiceReviewDetail = {
   invoice: InvoiceDetail;
   proposal: Proposal | null;
+  proposal_history: ProposalVersion[];
   confidence: ConfidenceAssessment;
   options: Options;
   company_profile: { activity: string | null; sector: string | null };
@@ -191,12 +192,15 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
   const [savingProposal, setSavingProposal] = useState(false);
   const [regeneratingProposal, setRegeneratingProposal] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [restoringProposal, setRestoringProposal] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [reextracting, setReextracting] = useState(false);
   const [retryingOcr, setRetryingOcr] = useState(false);
   const [exportingCsv, setExportingCsv] = useState(false);
+  const [confirmation, setConfirmation] = useState<{ title: string; description: string; confirmLabel?: string; destructive?: boolean; action: () => void } | null>(null);
   const observedStatus = useRef<string | null>(null);
   const initialAnchor = useRef(typeof window === 'undefined' ? '' : window.location.hash.slice(1));
+  const requestConfirmation = (title: string, description: string, action: () => void, options: { confirmLabel?: string; destructive?: boolean } = {}) => setConfirmation({ title, description, action, ...options });
 
   const loadDetails = useCallback(async (showLoader = true, showError = true) => {
     if (showLoader) setLoading(true);
@@ -215,7 +219,7 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
         if (data.invoice.status === 'proposal_ready') {
           toast.success('La proposition comptable est disponible. Vérifiez les contrôles et les lignes avant décision.');
         } else if (failedStatuses.includes(data.invoice.status)) {
-          toast.error(data.invoice.ocr_error_message || 'Le traitement de la facture a échoué.');
+          toast.error('Le traitement de la facture a échoué. Vérifiez le document puis relancez l’analyse.');
         }
       }
 
@@ -299,22 +303,25 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
       const stamp = amountOrZero('Droit de timbre', invoiceData.stamp_amount);
       const withholding = amountOrZero('Retenue à la source', invoiceData.withholding_amount);
 
-      if (missingComponents.length > 0 && !window.confirm(`Les champs suivants sont vides : ${missingComponents.join(', ')}. Les traiter comme 0,000 pour ce calcul déterministe ?`)) return;
-
       const grossTotal = subtotal + vat + fodec + otherTaxes + stamp;
       const netToPay = grossTotal - withholding;
 
-      setInvoiceData((current) => current ? {
-        ...current,
-        vat_amount: formatMilliAmount(vat),
-        fodec_amount: formatMilliAmount(fodec),
-        other_tax_amount: formatMilliAmount(otherTaxes),
-        stamp_amount: formatMilliAmount(stamp),
-        withholding_amount: formatMilliAmount(withholding),
-        total_amount: formatMilliAmount(grossTotal),
-        net_to_pay_amount: formatMilliAmount(netToPay),
-      } : current);
-      toast.success('Totaux recalculés localement. Vérifiez-les puis enregistrez les données facture.');
+      const applyTotals = () => {
+        setInvoiceData((current) => current ? {
+          ...current,
+          vat_amount: formatMilliAmount(vat),
+          fodec_amount: formatMilliAmount(fodec),
+          other_tax_amount: formatMilliAmount(otherTaxes),
+          stamp_amount: formatMilliAmount(stamp),
+          withholding_amount: formatMilliAmount(withholding),
+          total_amount: formatMilliAmount(grossTotal),
+          net_to_pay_amount: formatMilliAmount(netToPay),
+        } : current);
+        toast.success('Totaux recalculés localement. Vérifiez-les puis enregistrez les données facture.');
+      };
+      if (missingComponents.length > 0) {
+        requestConfirmation('Montants facultatifs vides', `Les champs ${missingComponents.join(', ')} seront traités comme 0,000 pour ce calcul local.`, applyTotals, { confirmLabel: 'Calculer' });
+      } else applyTotals();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Les montants ne peuvent pas être recalculés.');
     }
@@ -412,7 +419,15 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
 
   const regenerateProposal = () => {
     if (!detail?.can_manage || regeneratingProposal || invoiceNeedsSave || proposalNeedsSave) return;
-    if (!window.confirm('Générer une nouvelle proposition IA ? La version actuelle restera conservée pour audit et ne pourra plus être validée.')) return;
+    if (detail.proposal?.status === 'ready') {
+      requestConfirmation('Générer une nouvelle proposition ?', 'La version prête actuelle sera conservée dans l’historique et remplacée pour la validation.', runRegeneration, { confirmLabel: 'Générer une nouvelle version' });
+      return;
+    }
+    runRegeneration();
+  };
+
+  const runRegeneration = () => {
+    if (!detail?.can_manage || regeneratingProposal || invoiceNeedsSave || proposalNeedsSave) return;
 
     setRegeneratingProposal(true);
     router.post(`/companies/${companyId}/invoices/${invoiceId}/proposal/regenerate`, {}, {
@@ -502,7 +517,23 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
   };
 
   const rejectProposal = () => {
-    if (rejecting || !window.confirm('Rejeter cette proposition ? Aucune écriture comptable ne sera créée.')) return;
+    if (rejecting) return;
+    requestConfirmation('Rejeter cette proposition ?', 'Aucune écriture comptable ne sera créée.', runRejectProposal, { confirmLabel: 'Rejeter', destructive: true });
+  };
+
+  const restoreProposal = () => {
+    if (!detail?.can_manage || restoringProposal || detail.proposal?.status !== 'superseded') return;
+    setRestoringProposal(true);
+    router.post(`/companies/${companyId}/invoices/${invoiceId}/proposal/restore`, {}, {
+      preserveScroll: true,
+      onSuccess: () => { toast.success('La proposition existante est de nouveau prête à valider.'); void loadDetails(false, false); },
+      onError: (errors) => toast.error(firstError(errors) || 'La proposition ne peut pas être réactivée avec les données actuelles.'),
+      onFinish: () => setRestoringProposal(false),
+    });
+  };
+
+  const runRejectProposal = () => {
+    if (rejecting) return;
 
     setRejecting(true);
     router.post(`/companies/${companyId}/invoices/${invoiceId}/proposal/reject`, {}, {
@@ -537,6 +568,7 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
     || detail.checks.vat.status === 'blocking'
     || detail.checks.accounts.status === 'blocking'
     || detail.checks.currency.status === 'blocking'
+    || detail.checks.fiscal_year.status === 'blocking'
   ));
   const canValidate = Boolean(detail?.can_manage
     && detail.invoice.status === 'proposal_ready'
@@ -868,7 +900,7 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
                 {detail.invoice.status === 'accounting_analysis'
                   ? <span className="inline-flex items-center gap-2"><LoaderCircle className="animate-spin" size={16} /> L’analyse des comptes et la génération de l’écriture sont en cours.</span>
                   : detail.invoice.status === 'accounting_analysis_failed'
-                    ? detail.invoice.ocr_error_message || 'L’analyse comptable a échoué.'
+                    ? 'L’analyse n’a pas abouti. Vérifiez les informations puis relancez cette étape.'
                     : 'La proposition apparaîtra après l’extraction complète des données de facture.'}
               </div>
             )}
@@ -903,7 +935,7 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
             <div className="mt-3">
               {detail.invoice.ocr_display_text
                 ? <pre className="whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-5 text-slate-800">{detail.invoice.ocr_display_text}</pre>
-                : <p className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">Aucun texte OCR n’est disponible pour cette étape.{detail.invoice.ocr_error_message ? ` ${detail.invoice.ocr_error_message}` : ''}</p>}
+                : <p className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">Aucun texte reconnu n’est disponible pour cette étape.</p>}
             </div>
           </details>
         </div>
@@ -927,12 +959,16 @@ export default function InvoiceReviewPanel({ companyId, invoiceId, onChanged, on
             {invoiceNeedsSave && <p className="mt-2 text-[10px] font-medium text-amber-800">Enregistrez les données facture avant toute décision.</p>}
             {proposalNeedsSave && <p className="mt-1 text-[10px] font-medium text-amber-800">Enregistrez la proposition et son type avant toute décision.</p>}
           </>
+        ) : detail?.can_manage && detail.proposal?.status === 'superseded' && detail.proposal.journal_entry_id === null ? (
+          <div className="space-y-2"><button type="button" onClick={restoreProposal} disabled={restoringProposal || invoiceNeedsSave || proposalNeedsSave} className="inline-flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-900 hover:bg-teal-100 disabled:opacity-50">{restoringProposal ? <LoaderCircle className="animate-spin" size={14} /> : <RotateCcw size={14} />}{restoringProposal ? 'Restauration…' : 'Réactiver cette proposition'}</button><p className="text-[10px] text-slate-500">La proposition sera réutilisée si ses montants correspondent toujours aux données facture. La validation reste une décision humaine.</p></div>
         ) : detail?.can_manage && canExportCsv ? (
           <button type="button" onClick={() => void exportProposalCsv()} disabled={exportingCsv} className="inline-flex items-center gap-2 rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50">{exportingCsv ? <LoaderCircle className="animate-spin" size={14} /> : <Download size={14} />}{exportingCsv ? 'Export en cours…' : 'Export CSV'}</button>
         ) : (
           <p className="text-[10px] leading-4 text-slate-500">Aucune décision n’est disponible à cette étape ou pour ces permissions. Une écriture définitive n’est créée qu’après validation humaine.</p>
         )}
       </footer>}
+      {detail && detail.proposal_history.length > 0 && <details className="rounded-xl border border-slate-200 bg-white p-4"><summary className="cursor-pointer text-sm font-semibold text-slate-900">Historique des propositions ({detail.proposal_history.length})</summary><div className="mt-3 space-y-3">{detail.proposal_history.map((version, index) => <article key={version.id} className="rounded-lg border border-slate-200 p-3"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs font-semibold text-slate-800">Version {detail.proposal_history.length - index}{version.journal_code ? ` · Journal ${version.journal_code}` : ''}</p><ProposalStatusPill status={version.status} /></div><p className="mt-1 text-xs text-slate-600">{version.entry_description}</p><div className="mt-2 space-y-1">{version.lines.map((line, lineIndex) => <p key={lineIndex} className="text-[11px] text-slate-600">{line.chart_account_code} {line.chart_account_label} · {line.description || line.third_party_name || 'Ligne'} — Débit {line.debit} / Crédit {line.credit}</p>)}</div></article>)}</div></details>}
+      <ConfirmDialog open={confirmation !== null} title={confirmation?.title ?? ''} description={confirmation?.description ?? ''} confirmLabel={confirmation?.confirmLabel} destructive={confirmation?.destructive} onCancel={() => setConfirmation(null)} onConfirm={() => { const action = confirmation?.action; setConfirmation(null); action?.(); }} />
     </section>
   );
 }
@@ -1031,7 +1067,7 @@ function workflowSteps(detail: InvoiceReviewDetail): WorkflowStep[] {
   const { invoice, proposal, checks } = detail;
   const status = invoice.status;
   const proposalExists = Boolean(proposal);
-  const structured = Boolean(invoice.extraction_model || invoice.ocr_data.supplier_name || invoice.ocr_data.invoice_number);
+  const structured = Boolean(invoice.ocr_data.supplier_name || invoice.ocr_data.invoice_number);
   const failed = failedStatuses.includes(status);
   const accountingChecks = [checks.supplier, checks.invoice_number, checks.vat, checks.balance, checks.totals, checks.duplicate, checks.accounts, checks.fiscal_year, checks.currency];
   const checkWarning = accountingChecks.some((check) => check.status === 'warning' || check.status === 'blocking');
@@ -1098,19 +1134,19 @@ function workflowTitle(status: string): string {
   return 'Traitement de la facture';
 }
 
-function workflowDescription(status: string, error: string | null): string {
+function workflowDescription(status: string, _error: string | null): string {
   if (status === 'ocr_queued') return 'L’import a automatiquement ajouté ce document à la file de traitement. Les étapes suivantes se mettront à jour sans démarrage manuel.';
   if (status === 'ocr_processing') return 'Le document est en cours de lecture OCR ; les champs et la proposition comptable suivront automatiquement.';
   if (status === 'data_extraction') return 'Le texte OCR est disponible. L’extraction structurée identifie actuellement le fournisseur, les références et les montants.';
   if (status === 'accounting_analysis') return 'Les règles métier et les comptes actifs de la société sont consultés pour produire un brouillon comptable.';
-  if (failedStatuses.includes(status)) return error || 'Une étape du traitement a échoué. Vous pouvez relancer l’étape concernée.';
+  if (failedStatuses.includes(status)) return 'Le traitement n’a pas abouti. Vérifiez le document et relancez l’analyse.';
   if (status === 'invoice_incomplete') return 'Corrigez les champs signalés. L’analyse comptable reprendra automatiquement lorsque les données obligatoires seront complètes.';
-  if (status === 'proposal_ready') return 'L’IA a préparé un brouillon. Vérifiez les indicateurs, les contrôles et le document avant de décider.';
+  if (status === 'proposal_ready') return 'Une proposition est prête. Vérifiez les indicateurs, les contrôles et le document avant de décider.';
   if (status === 'accounting_validated') return 'La décision humaine a créé une écriture liée à cette facture. Vous pouvez maintenant exporter son CSV.';
   if (status === 'accounting_exported') return 'Un CSV comptable interne a été généré. Ce transfert ne constitue pas une synchronisation Sage.';
   if (status === 'proposal_rejected') return 'La proposition a été rejetée ; aucune écriture n’a été créée.';
-  if (status === 'ocr_completed') return 'La transcription est disponible ; vérifiez le document et les champs avant de poursuivre.';
-  return 'L’IA extrait et propose ; les règles vérifient ; le comptable prend la décision finale.';
+  if (status === 'ocr_completed') return 'Les données reconnues sont prêtes. Vérifiez les champs puis générez une proposition comptable.';
+  return 'Le traitement automatique prépare les données pour votre revue.';
 }
 
 function StatusPill({ status }: { status: string }) {
@@ -1119,13 +1155,13 @@ function StatusPill({ status }: { status: string }) {
   const isValidated = ['accounting_validated', 'accounting_exported'].includes(status);
   const label = status === 'ocr_queued' ? 'En attente'
     : isActive ? 'En cours'
-      : status === 'proposal_ready' ? 'À vérifier'
-        : status === 'invoice_incomplete' ? 'À compléter'
+      : status === 'proposal_ready' ? 'À valider'
+        : status === 'invoice_incomplete' ? 'À analyser'
           : status === 'accounting_exported' ? 'Exportée'
             : status === 'accounting_validated' ? 'Validée'
               : status === 'proposal_rejected' ? 'Rejetée'
-                : isError ? 'Échec'
-                  : status === 'ocr_completed' ? 'OCR terminé' : 'Importée';
+              : isError ? 'À analyser'
+                  : status === 'proposal_rejected' ? 'Rejetée' : status === 'ocr_completed' || status === 'invoice_incomplete' ? 'À analyser' : 'À analyser';
   const tone = isError ? 'bg-red-50 text-red-800'
     : isValidated ? 'bg-emerald-50 text-emerald-800'
       : isActive ? 'bg-blue-50 text-blue-800'
@@ -1338,7 +1374,9 @@ function formatMilliCurrency(amount: bigint | null, currency: string | null): st
 
 function firstError(errors: Record<string, string | string[]>): string | null {
   const value = Object.values(errors).flat()[0];
-  return typeof value === 'string' ? value : null;
+  if (typeof value !== 'string') return null;
+  if (/openrouter|mistral|ocr\.space|\bmodel\b|\bprovider\b|fournisseur d’extraction/i.test(value)) return 'L’analyse automatique a échoué. Vérifiez les données et réessayez.';
+  return value;
 }
 
 function formatTimestamp(timestamp: string): string {

@@ -431,6 +431,11 @@ class InvoiceController extends Controller
         abort_unless((int) $invoice->company_id === (int) $company->id, 404);
 
         $invoice->load(['lines', 'accountingProposal.lines.chartAccount', 'accountingProposal.lines.thirdParty', 'accountingProposal.lines.analyticalAccount', 'accountingProposal.journal', 'accountingProposal.journalEntry']);
+        $proposalHistory = $company->accountingProposals()
+            ->where('invoice_id', $invoice->id)
+            ->with(['lines.chartAccount', 'lines.thirdParty', 'lines.analyticalAccount', 'journal', 'journalEntry'])
+            ->orderByDesc('id')
+            ->get();
         $invoiceData = $this->currentInvoiceData($invoice, $schema);
         $proposal = $invoice->accountingProposal;
         $user = request()->user();
@@ -687,6 +692,25 @@ class InvoiceController extends Controller
                     'credit' => $line->credit,
                 ])->values()->all(),
             ],
+            'proposal_history' => $proposalHistory->map(fn ($version): array => [
+                'id' => $version->id,
+                'status' => $version->status,
+                'journal_code' => $version->journal?->code,
+                'invoice_type' => $version->invoice_type,
+                'entry_description' => $version->entry_description,
+                'explanation' => $version->explanation,
+                'warnings' => $version->warnings ?? [],
+                'created_at' => $version->created_at?->toIso8601String(),
+                'modified_at' => $version->modified_at?->toIso8601String(),
+                'lines' => $version->lines->map(fn ($line): array => [
+                    'chart_account_code' => $line->chartAccount?->code,
+                    'chart_account_label' => $line->chartAccount?->label,
+                    'third_party_name' => $line->thirdParty?->name,
+                    'description' => $line->description,
+                    'debit' => $line->debit,
+                    'credit' => $line->credit,
+                ])->values(),
+            ])->values(),
             'options' => [
                 'chart_accounts' => $company->chartAccounts()->where('is_active', true)->orderBy('code')->get(['id', 'code', 'label', 'account_type'])->toArray(),
                 'journals' => $company->journals()->where('is_active', true)->orderBy('code')->get(['id', 'code', 'label', 'journal_type'])->toArray(),
@@ -751,9 +775,6 @@ class InvoiceController extends Controller
                     ]);
                 }
 
-                if ($proposal->status === 'ready') {
-                    $proposal->forceFill(['status' => 'superseded'])->save();
-                }
             }
 
             $persistence->store($lockedInvoice, $invoiceData);
@@ -765,7 +786,9 @@ class InvoiceController extends Controller
                 'ocr_error_message' => $missingFields === []
                     ? null
                     : 'Les données obligatoires de la facture sont incomplètes. Corrigez les champs signalés avant l’analyse comptable.',
-                'status' => $missingFields === [] ? 'ocr_completed' : 'invoice_incomplete',
+                'status' => $missingFields === []
+                    ? ($proposal?->status === 'ready' ? 'proposal_ready' : 'ocr_completed')
+                    : 'invoice_incomplete',
             ])->save();
         });
 

@@ -15,6 +15,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import AppShell from '../../Components/AppShell';
+import ConfirmDialog from '../../Components/ConfirmDialog';
 import type { SharedAuthProps } from '../../types';
 
 type InvoiceSummary = {
@@ -65,7 +66,6 @@ type InvoiceUploadFailure = {
 
 type Props = {
   mode: 'workspace' | 'history';
-  ocrProvider: 'ocr_space' | 'mistral';
   maxUploadFileSizeBytes: number;
   companies: { id: number; name: string }[];
   company: { id: number; name: string; currency: string } | null;
@@ -88,7 +88,6 @@ const activeStatuses = ['ocr_queued', 'ocr_processing', 'data_extraction', 'acco
 
 export default function InvoicesIndex({
   mode,
-  ocrProvider,
   maxUploadFileSizeBytes,
   companies,
   company,
@@ -105,6 +104,7 @@ export default function InvoicesIndex({
   const [uploadProgress, setUploadProgress] = useState({ completed: 0, total: 0 });
   const [uploadFailures, setUploadFailures] = useState<InvoiceUploadFailure[]>([]);
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<number[]>([]);
+  const [clearConfirmationOpen, setClearConfirmationOpen] = useState(false);
   const invoiceRows = invoices?.data ?? [];
   const hasPendingAnalysis = (invoiceStats?.in_analysis ?? 0) > 0
     || invoiceRows.some((invoice) => activeStatuses.includes(invoice.status));
@@ -214,7 +214,13 @@ export default function InvoicesIndex({
   };
 
   const clearWorkspace = () => {
-    if (!company || !invoiceRows.length || !window.confirm('Vider votre espace de travail ? Les factures resteront dans l’historique complet de la société et ne seront pas supprimées.')) return;
+    if (!company || !invoiceRows.length) return;
+    setClearConfirmationOpen(true);
+  };
+
+  const confirmClearWorkspace = () => {
+    setClearConfirmationOpen(false);
+    if (!company || !invoiceRows.length) return;
     router.post(`/companies/${company.id}/invoices/clear-workspace`, {}, {
       preserveScroll: true,
       onSuccess: () => {
@@ -332,10 +338,8 @@ export default function InvoicesIndex({
             </h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
               {mode === 'history'
-                ? 'Ouvrez un document pour comparer l’original, les données extraites et l’écriture proposée.'
-                : ocrProvider === 'ocr_space'
-                  ? 'Importez vos documents : OCR.space Engine 3 lit le fichier, puis l’IA structure les données et prépare une proposition à vérifier.'
-                  : 'Importez vos documents : Mistral lit et structure la facture, puis OpenRouter prépare une proposition comptable à vérifier.'}
+                ? 'Ouvrez un document pour comparer l’original, les données extraites et les propositions comptables générées.'
+                : 'Importez vos documents : les données sont reconnues puis une proposition comptable est préparée pour votre revue.'}
             </p>
           </div>
 
@@ -535,6 +539,7 @@ export default function InvoicesIndex({
           </section>
         )}
       </section>
+      <ConfirmDialog open={clearConfirmationOpen} title="Vider l’espace de travail ?" description="Les factures resteront dans l’historique complet de la société. Cette action ne supprime aucun document." confirmLabel="Vider l’espace" destructive onCancel={() => setClearConfirmationOpen(false)} onConfirm={confirmClearWorkspace} />
     </AppShell>
   );
 }
@@ -570,16 +575,16 @@ function StatusBadge({ status, reviewedAt, exportedAt }: { status: string; revie
     ocr_queued: 'En analyse',
     ocr_processing: 'En analyse',
     data_extraction: 'En analyse',
-    invoice_incomplete: 'À compléter',
+    invoice_incomplete: 'À analyser',
     accounting_analysis: 'En analyse',
-    proposal_ready: 'À vérifier',
-    accounting_validated: 'Validée',
-    accounting_exported: 'Exportée',
-    proposal_rejected: 'Rejetée',
-    ocr_completed: 'OCR · à vérifier',
-    ocr_failed: 'Échec OCR',
-    data_extraction_failed: 'Échec extraction',
-    accounting_analysis_failed: 'Échec analyse',
+    proposal_ready: 'À valider',
+    accounting_validated: 'Validé',
+    accounting_exported: 'Exporté',
+    proposal_rejected: 'Rejeté',
+    ocr_completed: 'À analyser',
+    ocr_failed: 'À analyser',
+    data_extraction_failed: 'À analyser',
+    accounting_analysis_failed: 'À analyser',
   };
   const isFailed = ['ocr_failed', 'data_extraction_failed', 'accounting_analysis_failed'].includes(status);
   const isPending = activeStatuses.includes(status);
