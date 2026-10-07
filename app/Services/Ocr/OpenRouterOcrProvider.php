@@ -13,39 +13,48 @@ use Throwable;
 
 class OpenRouterOcrProvider implements OcrProvider
 {
-    private ?string $model = null;
+    // private ?string $model = null;
 
     public function __construct(
         private readonly InvoiceOcrSchema $schema,
         private readonly OpenRouterClient $client,
-    ) {}
+    ) {
+    }
 
     /** Override the model for one instance (tinker, tests, A/B comparisons). */
-    public function withModel(string $model): static
-    {
-        $clone = clone $this;
-        $clone->model = $model;
+    // public function withModel(string $model): static
+    // {
+    //     $clone = clone $this;
+    //     $clone->model = $model;
 
-        return $clone;
-    }
+    //     return $clone;
+    // }
 
     public function extract(Invoice $invoice): InvoiceOcrResult
     {
         $dataUrl = $this->imageDataUrl($invoice->mime_type, $this->readSource($invoice));
-        $model = $this->model ?? (string) config('services.openrouter.ocr_model');
+        $models = config('services.openrouter.ocr_models', []);
 
         $messages = [
-            [
-                'role' => 'system',
-                'content' => 'You extract supplier-invoice fields from this invoice image' //. $this->schema->annotationPrompt()
-                    .' Return the data in the structured JSON format defined by the invoice schema.'
-                    .' don\'t invent any numbers; if a field is not present in the image, return null for that field.',
-            ],
+
             [
                 'role' => 'user',
                 // text first, then image (OpenRouter's recommended order)
                 'content' => [
-                    ['type' => 'text', 'text' => 'Extrais les données de cette facture.'],
+                   ['type' => 'text', 'text' => '
+                        from this supplier invoice image Extract the invoice directly into the required JSON structure. 
+
+                        First, understand the invoice naturally: identify the supplier, customer, invoice
+                        number, dates, amounts, taxes, fees, payment information, and all invoice line
+                        items. Do not assume that the invoice layout matches the target schema.
+
+                        Once you have identified the information from the image, map the extracted data
+                        to the required JSON structure.
+
+                        Return only the final JSON matching the provided schema.
+                        Do not invent values. If a value is not visible or cannot be determined, use null.
+                        Preserve the values exactly as shown on the invoice whenever possible.
+                    '],
                     ['type' => 'image_url', 'image_url' => ['url' => $dataUrl]],
                 ],
             ],
@@ -55,8 +64,8 @@ class OpenRouterOcrProvider implements OcrProvider
             $result = $this->client->completeJson(
                 $messages,
                 $this->schema->responseFormat(),
-                maxTokens: 8000, // reasoning models spend tokens thinking before answering
-                model: $model,
+                maxTokens: 4000, // reasoning models spend tokens thinking before answering
+                models: $models,
             );
         } catch (AiProviderException $e) {
             // ASSUMPTION: adjust property/getter names to your exception class

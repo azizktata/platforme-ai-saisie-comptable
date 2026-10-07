@@ -2,16 +2,17 @@
 
 ## Project
 
-ComptaFlow is a Laravel application for multi-cabinet, multi-company supplier invoice processing and human-reviewed accounting proposals. The customer requirements in [`docs/requirements.md`](docs/requirements.md) are the product source of truth. [`README.md`](README.md) explains setup and current delivery status; [`docs/architecture.md`](docs/architecture.md) and the module docs under `docs/modules/` give more detailed decisions.
+ComptaFlow is a Laravel application for multi-cabinet, multi-company supplier invoice processing and human-reviewed accounting proposals. The customer requirements in `docs/requirements.md` are the product source of truth. `README.md` explains setup and current delivery status; `docs/architecture.md` and the module docs under `docs/modules/` give more detailed decisions.
 
 ## Stack and entry points
 
 - Backend: PHP 8.3+, Laravel 13, Eloquent, database queue; MySQL in normal use and in-memory SQLite for tests.
 - Frontend: Inertia 2, React 19, TypeScript, Vite, Tailwind CSS 4.
 - Laravel bootstrapping/routing: `bootstrap/app.php`, `routes/web.php`, `routes/console.php`.
-- Inertia entry: `resources/js/app.tsx`; pages are under `resources/js/Pages/`, shared UI under `resources/js/Components/`.
+- Inertia entry: `resources/js/app.tsx`; pages under `resources/js/Pages/`, shared UI under `resources/js/Components/`.
 - Backend areas: `app/Http/Controllers`, `app/Http/Requests`, `app/Policies`, `app/Models`, `app/Services`, `app/Jobs`.
 - Database schema and sample data: `database/migrations`, `database/seeders`, `database/factories`.
+- the .env is not permissable for the AI model to read, it have sensible security keys, you can see .env.example instead
 
 ## Domain and security invariants
 
@@ -23,6 +24,7 @@ ComptaFlow is a Laravel application for multi-cabinet, multi-company supplier in
 - Preserve raw OCR/extraction/proposal provider results and model/usage metadata where the existing flow does so.
 - Monetary database precision supports Tunisian millimes (`DECIMAL(18,3)`). Do not round to two decimals without a domain requirement.
 - Demo accounting data is fictitious and must remain limited to `local`/`testing`; there is no live Sage import/export integration.
+- TLS CA bundles (`OCR_SPACE_CA_BUNDLE`, `MISTRAL_CA_BUNDLE`, `OPENROUTER_CA_BUNDLE`) must not be set to `false`; on Windows or servers without a system CA, provide an absolute PEM path in `.env`. Never define `verify=false`.
 
 ## Invoice processing flow
 

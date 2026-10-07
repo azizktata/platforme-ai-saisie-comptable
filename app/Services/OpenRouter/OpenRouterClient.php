@@ -6,6 +6,7 @@ use App\Data\StructuredAiResult;
 use App\Exceptions\AiProviderException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use JsonException;
 
 class OpenRouterClient
@@ -18,9 +19,9 @@ class OpenRouterClient
         array $messages,
         array $responseFormat,
         int $maxTokens = 5000,
-        ?string $model = null,
-    ): StructuredAiResult
-    {
+        array $models,
+        string $type = 'ocr',
+    ): StructuredAiResult {
         $apiKey = config('services.openrouter.api_key');
 
         if (! is_string($apiKey) || trim($apiKey) === '') {
@@ -71,12 +72,14 @@ class OpenRouterClient
 
         try {
             $payload = [
-                'model' => $model ?? (string) config('services.openrouter.model', 'openrouter/free'),
+                'models' => $models,
                 'messages' => $messages,
                 'response_format' => $responseFormat,
                 'temperature' => 0,
-                'max_tokens' => min(max(256, $maxTokens), 12000),
-                'require_parameters' => true,
+                'max_tokens' => min(max(256, $maxTokens), 6000),
+                // 'provider' => [
+                //     'require_parameters' => true,
+                // ],
             ];
 
             $response = Http::acceptJson()
@@ -86,6 +89,14 @@ class OpenRouterClient
                 ->timeout($timeout)
                 ->withOptions(['verify' => $verify])
                 ->post($endpoint, $payload);
+            Log::debug('OpenRouter HTTP response received', [
+                'type' => $type,
+                'invoice_id' => $invoice->id ?? null,
+                'http_status' => $response->status(),
+                'successful' => $response->successful(),
+                'response_size_bytes' => strlen($response->body()),
+                'openrouter_request_id' => $response->header('x-request-id'),
+            ]);
         } catch (ConnectionException $exception) {
             if ($this->isCertificateVerificationFailure($exception->getMessage())) {
                 throw new AiProviderException(
@@ -109,6 +120,19 @@ class OpenRouterClient
 
         if (! $response->successful()) {
             $status = $response->status();
+            Log::error('OpenRouter HTTP error', [
+                'type' => $type,
+                'invoice_id' => $invoice->id ?? null,
+                'http_status' => $response->status(),
+                'openrouter_request_id' => $response->header('x-request-id'),
+                'error' => $rawResponse['error'] ?? null,
+                'response_body' => $rawResponse ?? $response->body(),
+            ]);
+            Log::debug('OpenRouter raw response', [
+                'type' => $type,
+                'response_id' => $rawResponse['id'] ?? null,
+                'body' => $rawResponse,
+            ]);
             $errorCode = match (true) {
                 $status === 401 || $status === 403 => 'openrouter_authentication_failed',
                 $status === 429 => 'openrouter_rate_limited',
@@ -121,12 +145,29 @@ class OpenRouterClient
                 $errorCode,
                 $retryable,
                 $retryable
-                    ? 'OpenRouter a temporairement refusé la demande.'
-                    : 'OpenRouter n’a pas accepté la demande. Vérifiez la configuration du serveur.',
+                ? 'OpenRouter a temporairement refusé la demande.'
+                : 'OpenRouter n’a pas accepté la demande. Vérifiez la configuration du serveur.',
                 $rawResponse,
                 'OpenRouter returned HTTP '.$status.'.',
             );
         }
+        Log::debug('OpenRouter HTTP model response', [
+            'type' => $type,
+            'raw_response' => $rawResponse,
+            'invoice_id' => $invoice->id ?? null,
+            'http_status' => $response->status(),
+            'openrouter_request_id' => $response->header('x-request-id'),
+            'model' => $rawResponse['model'] ?? null,
+            'finish_reason' => $rawResponse['choices'][0]['finish_reason'] ?? null,
+            'usage' => $rawResponse['usage'] ?? null,
+            'response_id' => $rawResponse['id'] ?? null,
+        ]);
+        Log::debug('OpenRouter HTTP model selection', [
+            'type' => $type,
+            'invoice_id' => $invoice->id ?? null,
+            'requested_models' => $models,
+            'returned_model' => $rawResponse['model'] ?? null,
+        ]);
 
         $choice = $rawResponse['choices'][0] ?? null;
         $message = is_array($choice) && is_array($choice['message'] ?? null) ? $choice['message'] : [];

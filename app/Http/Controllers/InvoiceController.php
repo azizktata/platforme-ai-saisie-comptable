@@ -199,13 +199,16 @@ class InvoiceController extends Controller
                 'invoice_id' => $invoice->id,
                 'company_id' => $company->id,
                 'error_code' => $exception->errorCode,
-                'transport_error' => $exception->diagnostic,
+                'diagnostic' => $exception->diagnostic,
+                'raw_response' => $exception->rawResponse,
             ]);
-        } catch (\Throwable) {
+        } catch (\Throwable $exception) {
             $this->markOcrQueueFailure($invoice);
             Log::warning('Invoice OCR job could not be dispatched.', [
                 'invoice_id' => $invoice->id,
                 'company_id' => $company->id,
+                'message' => $exception->getMessage(),
+                'exception' => get_class($exception),
             ]);
         }
 
@@ -528,7 +531,7 @@ class InvoiceController extends Controller
             'stamp_amount' => 'timbre fiscal',
             'total_amount' => 'TTC brut',
         ], static fn (string $label, string $field): bool => ! is_string($invoiceData[$field] ?? null)
-            || ! preg_match('/^-?\d{1,15}(?:\.\d{1,3})?$/', $invoiceData[$field]), ARRAY_FILTER_USE_BOTH));
+                || ! preg_match('/^-?\d{1,15}(?:\.\d{1,3})?$/', $invoiceData[$field]), ARRAY_FILTER_USE_BOTH));
         $missingNetAmounts = $netCheckAvailable ? [] : array_values(array_filter([
             ! is_string($invoiceData['withholding_amount'] ?? null) ? 'retenue à la source' : null,
             ! is_string($invoiceData['net_to_pay_amount'] ?? null) ? 'net à payer' : null,
@@ -869,6 +872,22 @@ class InvoiceController extends Controller
                 'Cache-Control' => 'private, no-store',
             ],
         );
+    }
+
+    public function destroy(Company $company, Invoice $invoice): RedirectResponse
+    {
+        $this->authorize('manageInvoices', $company);
+        abort_unless((int) $invoice->company_id === (int) $company->id, 404);
+
+        // Delete the physical file from storage
+        if ($invoice->storage_disk === 'local' && Storage::disk('local')->exists($invoice->file_path)) {
+            Storage::disk('local')->delete($invoice->file_path);
+        }
+
+        // Delete the invoice record and related data
+        $invoice->delete();
+
+        return back()->with('success', 'La facture a été supprimée avec succès.');
     }
 
     private function maxUploadFileSizeBytes(): int

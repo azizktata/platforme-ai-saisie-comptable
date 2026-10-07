@@ -18,6 +18,8 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
+
 use Throwable;
 
 class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
@@ -52,6 +54,15 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
         return [30, 120];
     }
 
+//     public function middleware(): array
+// {
+//     return [
+//         (new WithoutOverlapping("company-ocr:{$this->companyId}"))
+//             ->releaseAfter(3)
+//             ->expireAfter(240),
+//     ];
+// }
+
     public function handle(
         OcrProvider $provider,
         InvoiceDataCompletenessChecker $completenessChecker,
@@ -76,6 +87,7 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
                     'error_code' => $exception->errorCode,
                     'transport_error' => $exception->diagnostic,
                     'attempt' => $invoice->ocr_attempts,
+                    'ocr_response' => $invoice->ocr_response,
                 ]);
 
                 return;
@@ -87,6 +99,7 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
                 'error_code' => $exception->errorCode,
                 'transport_error' => $exception->diagnostic,
                 'attempt' => $invoice->ocr_attempts,
+                'ocr_response' => $invoice->ocr_response,
             ]);
 
             throw $exception;
@@ -121,14 +134,21 @@ class ProcessInvoiceOcr implements ShouldQueue, ShouldBeUnique
             ? $exception->errorCode
             : 'processing_attempts_exhausted';
 
-        $this->markFailed($errorCode, $exception instanceof OcrProviderException ? $exception->rawResponse : null, app(InvoiceProcessingErrorMessage::class));
-
-        Log::error('Invoice OCR job exhausted its attempts.', [
+        $logContext = [
             'invoice_id' => $invoice->id,
             'company_id' => $invoice->company_id,
             'error_code' => $errorCode,
             'attempts' => $invoice->ocr_attempts,
-        ]);
+        ];
+
+        if ($exception instanceof OcrProviderException) {
+            $logContext['raw_response'] = $exception->rawResponse;
+            $logContext['diagnostic'] = $exception->diagnostic ?? null;
+        }
+
+        Log::error('Invoice OCR job exhausted its attempts.', $logContext);
+
+        $this->markFailed($errorCode, $exception instanceof OcrProviderException ? $exception->rawResponse : null, app(InvoiceProcessingErrorMessage::class));
     }
 
     private function claimInvoice(): ?Invoice

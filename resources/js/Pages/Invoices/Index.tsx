@@ -9,6 +9,7 @@ import {
   LoaderCircle,
   RotateCcw,
   Sparkles,
+  Trash2,
   Upload,
   type LucideIcon,
 } from 'lucide-react';
@@ -229,6 +230,29 @@ export default function InvoicesIndex({
       },
       onError: () => toast.error('L’espace de travail n’a pas pu être vidé. Réessayez.'),
     });
+  };
+
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
+  const [deleteInvoiceId, setDeleteInvoiceId] = useState<number | null>(null);
+
+  const deleteInvoice = (invoiceId: number) => {
+    setDeleteInvoiceId(invoiceId);
+    setDeleteConfirmationOpen(true);
+  };
+
+  const confirmDeleteInvoice = () => {
+    setDeleteConfirmationOpen(false);
+    if (!deleteInvoiceId || !company) return;
+    router.post(`/companies/${company.id}/invoices/${deleteInvoiceId}`, {}, {
+      preserveScroll: true,
+      onSuccess: () => {
+        toast.success('Facture supprimée.');
+        setDeleteInvoiceId(null);
+        router.reload({ only: ['invoices', 'invoiceStats'] });
+      },
+      onError: () => toast.error('La suppression de la facture a échoué. Réessayez.'),
+    });
+    setDeleteInvoiceId(null);
   };
 
   const uploadFiles = async (batch: File[]) => {
@@ -505,7 +529,7 @@ export default function InvoicesIndex({
                             </p>
                           )}
                           {invoice.ocr_warnings.some((warning) => warning.includes('mismatch')) && <p className="mt-1 text-[11px] leading-4 text-amber-700">Montants à contrôler</p>}
-                          {invoice.ocr_warnings.includes('invoice_totals_unverified') && <p className="mt-1 text-[11px] leading-4 text-amber-700">Totaux à vérifier</p>}
+                          {/* {invoice.ocr_warnings.includes('invoice_totals_unverified') && <p className="mt-1 text-[11px] leading-4 text-amber-700">Totaux à vérifier</p>} */}
                         </td>
                         <td className="whitespace-nowrap px-5 py-4 text-right">
                           <div className="flex items-center justify-end gap-1.5">
@@ -520,6 +544,17 @@ export default function InvoicesIndex({
                             <a href={invoice.download_url} title="Télécharger le document" className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-700 hover:border-teal-300 hover:text-teal-800" aria-label={`Télécharger ${invoice.original_filename}`}>
                               <ArrowDownToLine size={15} />
                             </a>
+                            {canReviewInvoices && (
+                              <button
+                                type="button"
+                                onClick={() => deleteInvoice(invoice.id)}
+                                title="Supprimer cette facture"
+                                aria-label={`Supprimer ${invoice.original_filename}`}
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-100"
+                              >
+                               <Trash2 size={15} />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -540,6 +575,8 @@ export default function InvoicesIndex({
         )}
       </section>
       <ConfirmDialog open={clearConfirmationOpen} title="Vider l’espace de travail ?" description="Les factures resteront dans l’historique complet de la société. Cette action ne supprime aucun document." confirmLabel="Vider l’espace" destructive onCancel={() => setClearConfirmationOpen(false)} onConfirm={confirmClearWorkspace} />
+
+  <ConfirmDialog open={deleteConfirmationOpen} title="Supprimer la facture ?" description="Cette action supprime définitivement la facture de la société. Cette opération est irréversible." confirmLabel="Supprimer" destructive onCancel={() => setDeleteConfirmationOpen(false)} onConfirm={confirmDeleteInvoice} />
     </AppShell>
   );
 }

@@ -70,6 +70,9 @@ Route::middleware('auth')->group(function (): void {
         ->name('companies.invoices.bulk-review');
     Route::get('/companies/{company}/invoices/{invoice}/file', [InvoiceController::class, 'download'])
         ->name('companies.invoices.download');
+    Route::post('/companies/{company}/invoices/{invoice}', [InvoiceController::class, 'destroy'])
+        ->name('companies.invoices.destroy')
+        ->middleware('can:manageInvoices,company');
     Route::get('/cabinet/settings', [CabinetSettingsController::class, 'edit'])->name('cabinet.settings.edit');
     Route::patch('/cabinet/settings', [CabinetSettingsController::class, 'update'])->name('cabinet.settings.update');
     Route::post('/cabinet/activities', [CabinetActivityController::class, 'store'])->name('cabinet.activities.store');
